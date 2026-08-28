@@ -347,3 +347,216 @@ class TestTeamActivity:
     def test_non_member_org_403(self, client):
         r = client.get(f"{BASE_URL}/api/orgs/org_doesnotexist999/team-activity")
         assert r.status_code == 403
+
+
+# ---------- Sprint Burndown (iteration 5) ----------
+from datetime import date, datetime as _dt, timedelta as _td  # noqa: E402
+
+
+class TestBurndown:
+    state = {}
+
+    def test_burndown_owner_200_and_shape(self, client, org_id):
+        pr = client.get(f"{BASE_URL}/api/orgs/{org_id}/sprints")
+        assert pr.status_code == 200, pr.text
+        sprints = pr.json()
+        assert sprints, "no sprints seeded"
+        sp = sprints[0]
+        TestBurndown.state["sprint_id"] = sp["sprint_id"]
+        r = client.get(f"{BASE_URL}/api/orgs/{org_id}/sprints/{sp['sprint_id']}/burndown")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        for k in ["sprint_id", "sprint_name", "start_date", "end_date", "total_tasks",
+                  "completed_tasks", "total_estimate_hours", "series"]:
+            assert k in d, f"missing field {k}: {d}"
+        assert d["sprint_id"] == sp["sprint_id"]
+        assert isinstance(d["series"], list) and d["series"]
+        sd = _dt.fromisoformat(d["start_date"]).date()
+        ed = _dt.fromisoformat(d["end_date"]).date()
+        assert len(d["series"]) == (ed - sd).days + 1, \
+            f"series len {len(d['series'])} != days {(ed - sd).days + 1}"
+        TestBurndown.state["data"] = d
+
+    def test_ideal_decreases_linearly_to_zero(self, client, org_id):
+        d = TestBurndown.state.get("data")
+        assert d, "prior test did not run"
+        series = d["series"]
+        total = d["total_estimate_hours"]
+        assert abs(series[0]["ideal"] - total) < 0.02, f"first ideal {series[0]['ideal']} != total {total}"
+        assert abs(series[-1]["ideal"]) < 0.02, f"last ideal should be 0, got {series[-1]['ideal']}"
+        ideals = [p["ideal"] for p in series]
+        assert all(ideals[i] >= ideals[i + 1] - 0.001 for i in range(len(ideals) - 1)), ideals
+        # linearity: constant step
+        if len(ideals) > 2:
+            steps = [round(ideals[i] - ideals[i + 1], 2) for i in range(len(ideals) - 1)]
+            assert max(steps) - min(steps) < 0.05, f"non-linear ideal steps {steps}"
+
+    def test_actual_null_for_future_dates(self, client, org_id):
+        d = TestBurndown.state.get("data")
+        today = date.today()
+        for p in d["series"]:
+            pd = _dt.fromisoformat(p["date"]).date()
+            if pd > today:
+                assert p["actual"] is None, f"{p} should have null actual"
+            else:
+                assert isinstance(p["actual"], (int, float)), f"{p} actual should be numeric"
+
+    def test_burndown_404_wrong_sprint(self, client, org_id):
+        r = client.get(f"{BASE_URL}/api/orgs/{org_id}/sprints/sprint_nope123/burndown")
+        assert r.status_code == 404, f"got {r.status_code}: {r.text[:200]}"
+
+    def test_burndown_403_non_member_org(self, client):
+        r = client.get(f"{BASE_URL}/api/orgs/org_doesnotexist999/sprints/s1/burndown")
+        assert r.status_code == 403
+
+    def test_burndown_401_unauthenticated(self, org_id):
+        sid = TestBurndown.state.get("sprint_id", "s1")
+        r = requests.get(f"{BASE_URL}/api/orgs/{org_id}/sprints/{sid}/burndown")
+        assert r.status_code == 401
+
+    def test_burndown_403_for_member_role_user(self, client, org_id):
+        """A user who IS a member of the org should be allowed (ensure_member allows any role)."""
+        email = TestTeamActivity.state.get("member_email") or "test_qa_member_1787903479@example.com"
+        s = requests.Session()
+        lr = s.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": "Welcome@123"})
+        if lr.status_code != 200:
+            pytest.skip(f"member login unavailable: {lr.status_code}")
+        tok = lr.json()["token"]
+        sid = TestBurndown.state["sprint_id"]
+        mr = requests.get(f"{BASE_URL}/api/orgs/{org_id}/sprints/{sid}/burndown",
+                          headers={"Authorization": f"Bearer {tok}"})
+        assert mr.status_code == 200, f"org member should read burndown, got {mr.status_code}"
+
+
+# ---------- Task Comments (iteration 5) ----------
+class TestComments:
+    state = {}
+
+    @pytest.fixture(scope="class", autouse=True)
+    def task(self, client, org_id):
+        r = client.get(f"{BASE_URL}/api/orgs/{org_id}/tasks")
+        assert r.status_code == 200, r.text
+        tasks = r.json()
+        assert tasks, "no tasks seeded"
+        TestComments.state["task_id"] = tasks[0]["task_id"]
+        return tasks[0]["task_id"]
+
+    def test_create_comment_plain(self, client, org_id, creds):
+        tid = TestComments.state["task_id"]
+        r = client.post(f"{BASE_URL}/api/orgs/{org_id}/tasks/{tid}/comments",
+                        json={"body": "TEST_plain comment body"})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["body"] == "TEST_plain comment body"
+        assert d["author_email"] == creds["email"]
+        assert d["author_name"]
+        assert d["mentions"] == [] and d["mentions_emails"] == []
+        assert "comment_id" in d and "created_at" in d
+        assert "_id" not in d
+        TestComments.state["first_id"] = d["comment_id"]
+
+    def test_create_comment_with_mention(self, client, org_id, creds):
+        tid = TestComments.state["task_id"]
+        member = TestTeamActivity.state.get("member_email") or "test_qa_member_1787903479@example.com"
+        body = f"TEST_hey @{member} and @nobody_unknown@example.com please review"
+        r = client.post(f"{BASE_URL}/api/orgs/{org_id}/tasks/{tid}/comments", json={"body": body})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert member.lower() in d["mentions_emails"], d["mentions_emails"]
+        assert "nobody_unknown@example.com" in d["mentions_emails"]
+        assert len(d["mentions"]) == 1, f"only the existing user should resolve: {d['mentions']}"
+        TestComments.state["second_id"] = d["comment_id"]
+
+    def test_list_comments_sorted_and_enriched(self, client, org_id):
+        tid = TestComments.state["task_id"]
+        r = client.get(f"{BASE_URL}/api/orgs/{org_id}/tasks/{tid}/comments")
+        assert r.status_code == 200, r.text
+        items = r.json()
+        assert isinstance(items, list) and len(items) >= 2
+        ids = [c["comment_id"] for c in items]
+        assert TestComments.state["first_id"] in ids
+        assert TestComments.state["second_id"] in ids
+        assert ids.index(TestComments.state["first_id"]) < ids.index(TestComments.state["second_id"])
+        created = [c["created_at"] for c in items]
+        assert created == sorted(created), "not sorted asc by created_at"
+        for c in items:
+            assert "_id" not in c
+            assert c["author_email"], c
+            assert c["author_name"], c
+            assert "author_picture" in c
+
+    def test_create_comment_404_missing_task(self, client, org_id):
+        r = client.post(f"{BASE_URL}/api/orgs/{org_id}/tasks/task_nope999/comments",
+                        json={"body": "TEST_x"})
+        assert r.status_code == 404, f"got {r.status_code}: {r.text[:200]}"
+
+    def test_comments_401_unauthenticated(self, org_id):
+        tid = TestComments.state["task_id"]
+        r = requests.get(f"{BASE_URL}/api/orgs/{org_id}/tasks/{tid}/comments")
+        assert r.status_code == 401
+
+    def test_comments_403_non_member(self, client):
+        r = client.get(f"{BASE_URL}/api/orgs/org_doesnotexist999/tasks/t1/comments")
+        assert r.status_code == 403
+
+    def test_empty_body_validation(self, client, org_id):
+        tid = TestComments.state["task_id"]
+        r = client.post(f"{BASE_URL}/api/orgs/{org_id}/tasks/{tid}/comments", json={})
+        assert r.status_code == 422, f"expected 422 got {r.status_code}"
+
+
+# ---------- Weekly digest cron (iteration 5) ----------
+class TestCronWeeklyDigest:
+    def _secret(self):
+        env = dotenv_values("/app/backend/.env")
+        s = env.get("WEBHOOK_CRON_SECRET")
+        if not s:
+            pytest.fail("WEBHOOK_CRON_SECRET missing from /app/backend/.env")
+        return s
+
+    def test_no_auth_401(self):
+        r = requests.post(f"{BASE_URL}/api/cron/weekly-digest")
+        assert r.status_code == 401, f"got {r.status_code}: {r.text[:200]}"
+
+    def test_wrong_secret_401(self):
+        r = requests.post(f"{BASE_URL}/api/cron/weekly-digest",
+                          headers={"Authorization": "Bearer nope", "X-Webhook-Id": "TEST_bad"})
+        assert r.status_code == 401
+
+    def test_queued_then_duplicate(self):
+        secret = self._secret()
+        wid = f"TEST_wh_{int(time.time())}"
+        h = {"Authorization": f"Bearer {secret}", "X-Webhook-Id": wid}
+        r1 = requests.post(f"{BASE_URL}/api/cron/weekly-digest", headers=h)
+        assert r1.status_code == 200, r1.text
+        assert r1.json() == {"ok": True, "queued": True}, r1.json()
+        r2 = requests.post(f"{BASE_URL}/api/cron/weekly-digest", headers=h)
+        assert r2.status_code == 200, r2.text
+        assert r2.json() == {"ok": True, "duplicate": True}, r2.json()
+        TestCronWeeklyDigest.wid = wid
+
+    def test_cron_run_recorded_in_db(self):
+        import asyncio
+        from motor.motor_asyncio import AsyncIOMotorClient
+        env = dotenv_values("/app/backend/.env")
+        wid = getattr(TestCronWeeklyDigest, "wid", None)
+        assert wid, "prior test did not run"
+
+        async def check():
+            cl = AsyncIOMotorClient(env["MONGO_URL"])
+            doc = await cl[env["DB_NAME"]].cron_runs.find_one({"run_id": wid})
+            cl.close()
+            return doc
+        doc = asyncio.get_event_loop().run_until_complete(check()) if False else asyncio.run(check())
+        assert doc, f"no cron_runs record for {wid}"
+        assert doc["name"] == "weekly-digest"
+        assert doc["at"]
+
+    def test_no_backend_exception_from_digest(self):
+        """After queueing, backend log should not contain a digest traceback."""
+        time.sleep(4)
+        import subprocess
+        out = subprocess.run(["tail", "-n", "120", "/var/log/supervisor/backend.err.log"],
+                             capture_output=True, text=True).stdout
+        bad = [ln for ln in out.splitlines() if "_build_and_send_digest" in ln or "Task exception was never retrieved" in ln]
+        assert not bad, f"digest background task raised: {bad[:5]}"

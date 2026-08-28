@@ -1,0 +1,9 @@
+crons:
+  - name: weekly-digest
+    description: "Sends Monday weekly digest email to admins/owners with last week's hours and overdue tasks"
+    cron: "0 8 * * 1"
+    timezone: "UTC"
+    endpoint: "{{BASE_URL}}/api/cron/weekly-digest"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

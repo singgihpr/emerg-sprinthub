@@ -9,7 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Rocket, Plus, CalendarBlank } from "@phosphor-icons/react";
+import { Rocket, Plus, CalendarBlank, ChartLine } from "@phosphor-icons/react";
+import BurndownDialog from "@/components/BurndownDialog";
 
 export default function Sprints() {
   const { currentOrg } = useOrg();
@@ -17,6 +18,7 @@ export default function Sprints() {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [open, setOpen] = useState(false);
+  const [burndown, setBurndown] = useState({ open: false, sprint: null });
   const [form, setForm] = useState({ project_id: "", name: "", goal: "", start_date: "", end_date: "" });
 
   const load = async () => {
@@ -87,6 +89,11 @@ export default function Sprints() {
                   <div className="h-full bg-indigo-600 transition-all" style={{ width: `${st.progress}%` }} />
                 </div>
               </div>
+              <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
+                <Button variant="outline" size="sm" className="gap-2" onClick={() => setBurndown({ open: true, sprint: s })} data-testid={`burndown-btn-${s.sprint_id}`}>
+                  <ChartLine size={14} /> View burndown
+                </Button>
+              </div>
             </Card>
           );
         })}
@@ -115,6 +122,7 @@ export default function Sprints() {
           </div>
         </DialogContent>
       </Dialog>
+      <BurndownDialog open={burndown.open} onOpenChange={(o) => setBurndown({ open: o, sprint: o ? burndown.sprint : null })} sprint={burndown.sprint} />
     </div>
   );
 }

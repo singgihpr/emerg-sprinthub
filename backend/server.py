@@ -176,6 +176,9 @@ class TimeEntryCreate(BaseModel):
     note: Optional[str] = ""
     date: Optional[str] = None
 
+class CommentCreate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=5000)
+
 # ----------------------
 # Auth endpoints
 # ----------------------
@@ -619,6 +622,108 @@ async def team_activity(org_id: str, user: dict = Depends(get_current_user)):
 
 
 # ----------------------
+# Sprint Burndown
+# ----------------------
+@api.get("/orgs/{org_id}/sprints/{sprint_id}/burndown")
+async def sprint_burndown(org_id: str, sprint_id: str, user: dict = Depends(get_current_user)):
+    await ensure_member(org_id, user["user_id"])
+    sprint = await db.sprints.find_one({"sprint_id": sprint_id, "org_id": org_id}, {"_id": 0})
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+    tasks = await db.tasks.find({"org_id": org_id, "sprint_id": sprint_id}, {"_id": 0}).to_list(2000)
+    total_hours = sum(t.get("estimate_hours") or 0 for t in tasks)
+
+    if not sprint.get("start_date") or not sprint.get("end_date"):
+        return {"sprint_id": sprint_id, "total_estimate_hours": total_hours, "series": []}
+
+    start_d = datetime.fromisoformat(sprint["start_date"]).date()
+    end_d = datetime.fromisoformat(sprint["end_date"]).date()
+    days_total = max(1, (end_d - start_d).days)
+    today = now_utc().date()
+
+    series = []
+    cursor_d = start_d
+    while cursor_d <= end_d:
+        idx = (cursor_d - start_d).days
+        ideal = round(total_hours * (1 - idx / days_total), 2)
+        # actual: total - completed_at up to end-of-day
+        completed_hours = 0
+        for t in tasks:
+            ca = t.get("completed_at")
+            if not ca:
+                continue
+            ca_date = datetime.fromisoformat(ca.replace("Z", "+00:00") if "Z" in ca else ca).date() if isinstance(ca, str) else ca.date()
+            if ca_date <= cursor_d:
+                completed_hours += t.get("estimate_hours") or 0
+        actual = round(total_hours - completed_hours, 2)
+        series.append({
+            "date": cursor_d.isoformat(),
+            "ideal": ideal,
+            "actual": actual if cursor_d <= today else None,
+        })
+        cursor_d = cursor_d + timedelta(days=1)
+
+    completed_count = sum(1 for t in tasks if t.get("status") == "done")
+    return {
+        "sprint_id": sprint_id,
+        "sprint_name": sprint.get("name"),
+        "start_date": sprint["start_date"],
+        "end_date": sprint["end_date"],
+        "total_tasks": len(tasks),
+        "completed_tasks": completed_count,
+        "total_estimate_hours": total_hours,
+        "series": series,
+    }
+
+
+# ----------------------
+# Task Comments
+# ----------------------
+import re as _re
+MENTION_RE = _re.compile(r"@([\w.+-]+@[\w-]+\.[\w.-]+)")
+
+@api.get("/orgs/{org_id}/tasks/{task_id}/comments")
+async def list_comments(org_id: str, task_id: str, user: dict = Depends(get_current_user)):
+    await ensure_member(org_id, user["user_id"])
+    comments = await db.comments.find({"org_id": org_id, "task_id": task_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    author_ids = list({c["author_id"] for c in comments})
+    authors = await db.users.find({"user_id": {"$in": author_ids}}, {"_id": 0, "password_hash": 0}).to_list(500)
+    amap = {u["user_id"]: u for u in authors}
+    for c in comments:
+        a = amap.get(c["author_id"], {})
+        c["author_name"] = a.get("name") or a.get("email")
+        c["author_email"] = a.get("email")
+        c["author_picture"] = a.get("picture")
+    return comments
+
+@api.post("/orgs/{org_id}/tasks/{task_id}/comments")
+async def create_comment(org_id: str, task_id: str, body: CommentCreate, user: dict = Depends(get_current_user)):
+    await ensure_member(org_id, user["user_id"])
+    task = await db.tasks.find_one({"task_id": task_id, "org_id": org_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not body.body.strip():
+        raise HTTPException(status_code=422, detail="Comment cannot be empty")
+    mentions = list({m.lower() for m in MENTION_RE.findall(body.body)})
+    mentioned_users = []
+    if mentions:
+        found = await db.users.find({"email": {"$in": mentions}}, {"_id": 0, "password_hash": 0}).to_list(100)
+        mentioned_users = [u["user_id"] for u in found]
+    doc = {
+        "comment_id": new_id("cmt"), "org_id": org_id, "task_id": task_id,
+        "author_id": user["user_id"], "body": body.body,
+        "mentions": mentioned_users, "mentions_emails": mentions,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.comments.insert_one(dict(doc))
+    doc.pop("_id", None)
+    doc["author_name"] = user.get("name") or user.get("email")
+    doc["author_email"] = user.get("email")
+    doc["author_picture"] = user.get("picture")
+    return doc
+
+
+# ----------------------
 # Analytics
 # ----------------------
 @api.get("/orgs/{org_id}/analytics")
@@ -654,6 +759,185 @@ async def analytics(org_id: str, user: dict = Depends(get_current_user)):
         "completed_series": completed_series,
         "time_series": time_series,
     }
+
+
+# ----------------------
+# Email (Resend via Emergent proxy)
+# ----------------------
+from html import escape as _esc
+from html.parser import HTMLParser as _HTMLParser
+from urllib.parse import urlparse as _urlparse
+import ipaddress as _ipaddr
+
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "SprintHub")
+
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = ("reply with your password", "reply with the code", "send your password",
+             "cvv", "send us your password", "enter your password below",
+             "confirm your card number", "your full card number", "seed phrase",
+             "recovery phrase", "verify your card", "social security number",
+             "confirm your bank details")
+_HOSTISH = _re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", _re.I)
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        _ipaddr.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+class _EmailScan(_HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan(); scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = _urlparse(low).hostname or ""
+        if not _host_ok(host) or _urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = _urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+    if not EMAIL_KEY:
+        logger.warning("EMERGENT_EMAIL_KEY missing; skipping email send")
+        return None
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    try:
+        async with httpx.AsyncClient(timeout=30) as hc:
+            r = await hc.post(f"{EMAIL_BASE_URL}/api/v1/email/send",
+                              headers={"X-Email-Key": EMAIL_KEY}, json=payload)
+        r.raise_for_status()
+        return r.json().get("id")
+    except Exception as e:
+        logger.error(f"send_email failed: {e}")
+        return None
+
+
+# ----------------------
+# Weekly Digest (Cron)
+# ----------------------
+async def _build_and_send_digest():
+    """Build the weekly digest for each admin/owner (last 7 days hours + overdue tasks)."""
+    today = now_utc().date()
+    week_start = (today - timedelta(days=7)).isoformat()
+    # Find all owners/admins across all orgs
+    memberships = await db.memberships.find({"role": {"$in": ["owner", "admin"]}}, {"_id": 0}).to_list(2000)
+    for m in memberships:
+        org = await db.organizations.find_one({"org_id": m["org_id"]}, {"_id": 0})
+        u = await db.users.find_one({"user_id": m["user_id"]}, {"_id": 0, "password_hash": 0})
+        if not u or not u.get("email") or not org:
+            continue
+        # Aggregate hours by member for this org
+        entries = await db.time_entries.find(
+            {"org_id": m["org_id"], "date": {"$gte": week_start}}, {"_id": 0}
+        ).to_list(5000)
+        by_user = {}
+        for e in entries:
+            by_user[e["user_id"]] = by_user.get(e["user_id"], 0) + e["minutes"]
+        user_ids = list(by_user.keys())
+        users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "password_hash": 0}).to_list(500) if user_ids else []
+        umap = {x["user_id"]: x for x in users}
+        # Overdue tasks
+        overdue = await db.tasks.find({
+            "org_id": m["org_id"],
+            "status": {"$ne": "done"},
+            "due_date": {"$lt": today.isoformat()},
+        }, {"_id": 0}).to_list(1000)
+
+        rows = "".join(
+            f'<tr><td style="padding:6px 12px;border-top:1px solid #E2E8F0">{_esc(umap.get(uid,{}).get("name") or umap.get(uid,{}).get("email") or "Unknown")}</td>'
+            f'<td style="padding:6px 12px;border-top:1px solid #E2E8F0;text-align:right;font-family:monospace">{mins//60}h {mins%60}m</td></tr>'
+            for uid, mins in sorted(by_user.items(), key=lambda x: -x[1])
+        ) or '<tr><td colspan="2" style="padding:12px;color:#94A3B8">No time logged this week.</td></tr>'
+
+        overdue_html = "".join(
+            f'<li style="padding:4px 0"><strong>{_esc(t["title"])}</strong> '
+            f'<span style="color:#94A3B8">— due {_esc(t.get("due_date") or "")}</span></li>'
+            for t in overdue[:10]
+        ) or '<li style="color:#94A3B8">No overdue tasks. Nice work.</li>'
+
+        subject = f"Weekly digest — {org['name']}"
+        html = f"""
+<table role="presentation" width="100%" style="background:#F8FAFC;padding:32px 0;font-family:Arial,sans-serif">
+  <tr><td align="center">
+    <table role="presentation" width="600" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,0.06)">
+      <tr><td style="padding:28px 32px;background:#4F46E5;color:#fff">
+        <div style="font-size:12px;letter-spacing:0.2em;text-transform:uppercase;opacity:0.8">Weekly Digest</div>
+        <div style="font-size:24px;font-weight:600;margin-top:6px">{_esc(org['name'])}</div>
+      </td></tr>
+      <tr><td style="padding:24px 32px">
+        <p style="color:#0F172A;font-size:15px">Hi {_esc(u.get('name') or u.get('email'))}, here is your team snapshot for the last 7 days.</p>
+        <h3 style="color:#0F172A;font-size:16px;margin-top:24px;margin-bottom:8px">Hours logged</h3>
+        <table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px;color:#334155">{rows}</table>
+        <h3 style="color:#0F172A;font-size:16px;margin-top:24px;margin-bottom:8px">Overdue tasks ({len(overdue)})</h3>
+        <ul style="color:#334155;font-size:14px;padding-left:20px;margin:0">{overdue_html}</ul>
+        <p style="font-size:12px;color:#94A3B8;margin-top:28px">Sent by {_esc(EMAIL_FROM_NAME)}. You are receiving this because you are an admin of {_esc(org['name'])}. We never ask for your password by email.</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+"""
+        await send_email(to=u["email"], subject=subject, html=html)
+
+
+@app.post("/api/cron/weekly-digest")
+async def cron_weekly_digest(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    if not secret or not auth.startswith("Bearer ") or auth[7:] != secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = request.headers.get("X-Webhook-Id") or f"local-{now_utc().timestamp()}"
+    dup = await db.cron_runs.find_one({"run_id": run_id})
+    if dup:
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({"run_id": run_id, "at": now_utc().isoformat(), "name": "weekly-digest"})
+    import asyncio as _asyncio
+    _asyncio.create_task(_build_and_send_digest())
+    return {"ok": True, "queued": True}
+
 
 # ----------------------
 # Startup

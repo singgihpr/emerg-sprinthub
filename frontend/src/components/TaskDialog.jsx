@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { useOrg } from "@/context/OrgContext";
+import TaskComments from "@/components/TaskComments";
 
 const STATUS = [
   { v: "todo", l: "To Do" },
@@ -66,7 +67,7 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{task ? "Edit task" : "New task"}</DialogTitle></DialogHeader>
-        <div className="space-y-4">
+        <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
           <div>
             <Label>Title</Label>
             <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} data-testid="task-title-input" className="mt-1.5" />
@@ -147,6 +148,7 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button className="bg-indigo-600 hover:bg-indigo-700" onClick={save} data-testid="task-save-btn">{task ? "Save changes" : "Create task"}</Button>
           </div>
+          {task && <TaskComments taskId={task.task_id} members={members || []} />}
         </div>
       </DialogContent>
     </Dialog>

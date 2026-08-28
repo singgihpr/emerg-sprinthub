@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { ArrowsClockwise, Timer, ListChecks, Clock, Warning } from "@phosphor-icons/react";
+import { ArrowsClockwise, Timer, ListChecks, Clock, Warning, WarningCircle } from "@phosphor-icons/react";
 
 function fmtMinutes(m) {
   if (!m) return "0m";
@@ -74,6 +74,7 @@ export default function TeamActivity() {
   if (!data) return <div className="p-8 text-slate-500">Loading team activity…</div>;
 
   const activeTimers = data.members.filter((m) => m.active_timer).length;
+  const idleAlerts = data.members.filter((m) => m.active_timer && (m.active_timer.elapsed_seconds + tick) > 7200).length;
   const totalInProgress = data.members.reduce((s, m) => s + m.in_progress_tasks.length, 0);
   const totalLoggedToday = data.members.reduce((s, m) => s + m.logged_today_minutes, 0);
 
@@ -91,7 +92,7 @@ export default function TeamActivity() {
       </div>
 
       {/* KPI row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="p-5 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-700 flex items-center justify-center">
@@ -103,6 +104,17 @@ export default function TeamActivity() {
             </div>
           </div>
         </Card>
+        <Card className={`p-5 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)] ${idleAlerts > 0 ? "ring-2 ring-red-200" : ""}`} data-testid="idle-alerts-kpi">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${idleAlerts > 0 ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}`}>
+              <WarningCircle size={20} weight="duotone" />
+            </div>
+            <div>
+              <div className="text-2xl font-display font-semibold">{idleAlerts}</div>
+              <div className="text-xs text-slate-500">Idle {'>'} 2h</div>
+            </div>
+          </div>
+        </Card>
         <Card className="p-5 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
@@ -110,7 +122,7 @@ export default function TeamActivity() {
             </div>
             <div>
               <div className="text-2xl font-display font-semibold">{totalInProgress}</div>
-              <div className="text-xs text-slate-500">Tasks in progress across team</div>
+              <div className="text-xs text-slate-500">Tasks in progress</div>
             </div>
           </div>
         </Card>
@@ -155,16 +167,18 @@ export default function TeamActivity() {
                 {/* Active timer */}
                 <div className="flex-1 min-w-0">
                   {m.active_timer ? (
-                    <div className="rounded-lg border border-orange-200 bg-orange-50/60 px-3 py-2.5 flex items-center gap-3" data-testid={`active-timer-${m.user_id}`}>
-                      <span className="w-2 h-2 rounded-full bg-orange-500 timer-active" />
+                    <div className={`rounded-lg border px-3 py-2.5 flex items-center gap-3 ${elapsed > 7200 ? "border-red-300 bg-red-50/60" : "border-orange-200 bg-orange-50/60"}`} data-testid={`active-timer-${m.user_id}`}>
+                      <span className={`w-2 h-2 rounded-full timer-active ${elapsed > 7200 ? "bg-red-500" : "bg-orange-500"}`} />
                       <div className="min-w-0 flex-1">
-                        <div className="text-xs uppercase tracking-wider text-orange-600 font-medium">Working on</div>
+                        <div className={`text-xs uppercase tracking-wider font-medium ${elapsed > 7200 ? "text-red-600" : "text-orange-600"}`}>
+                          {elapsed > 7200 ? "Idle > 2h" : "Working on"}
+                        </div>
                         <div className="text-sm font-medium text-slate-900 truncate">{m.active_timer.task_title}</div>
                       </div>
                       {m.active_timer.project_key && (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white border border-orange-200 text-orange-700">{m.active_timer.project_key}</span>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded bg-white border ${elapsed > 7200 ? "border-red-200 text-red-700" : "border-orange-200 text-orange-700"}`}>{m.active_timer.project_key}</span>
                       )}
-                      <div className="font-mono text-lg text-orange-700 tabular-nums">{fmtElapsed(elapsed)}</div>
+                      <div className={`font-mono text-lg tabular-nums ${elapsed > 7200 ? "text-red-700" : "text-orange-700"}`}>{fmtElapsed(elapsed)}</div>
                     </div>
                   ) : (
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 flex items-center gap-3 text-slate-500 text-sm">
