@@ -12,6 +12,7 @@ import Tasks from "@/pages/Tasks";
 import Projects from "@/pages/Projects";
 import Sprints from "@/pages/Sprints";
 import Members from "@/pages/Members";
+import TeamActivity from "@/pages/TeamActivity";
 import Analytics from "@/pages/Analytics";
 
 function ProtectedRoute({ children }) {
@@ -43,6 +44,7 @@ function AppRoutes() {
         <Route path="projects" element={<Projects />} />
         <Route path="sprints" element={<Sprints />} />
         <Route path="members" element={<Members />} />
+        <Route path="team" element={<TeamActivity />} />
         <Route path="analytics" element={<Analytics />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

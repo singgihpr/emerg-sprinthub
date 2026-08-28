@@ -521,6 +521,104 @@ async def stop_timer(org_id: str, user: dict = Depends(get_current_user)):
     return entry
 
 # ----------------------
+# Team Activity (admin/manager only)
+# ----------------------
+@api.get("/orgs/{org_id}/team-activity")
+async def team_activity(org_id: str, user: dict = Depends(get_current_user)):
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires admin or manager role")
+
+    memberships = await db.memberships.find({"org_id": org_id}, {"_id": 0}).to_list(500)
+    user_ids = [x["user_id"] for x in memberships]
+    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "password_hash": 0}).to_list(500)
+    umap = {u["user_id"]: u for u in users}
+    role_map = {x["user_id"]: x["role"] for x in memberships}
+
+    tasks = await db.tasks.find({"org_id": org_id}, {"_id": 0}).to_list(5000)
+    active_timers = await db.active_timers.find({"org_id": org_id}, {"_id": 0}).to_list(500)
+    timer_map = {t["user_id"]: t for t in active_timers}
+    task_map = {t["task_id"]: t for t in tasks}
+    projects = await db.projects.find({"org_id": org_id}, {"_id": 0}).to_list(500)
+    project_map = {p["project_id"]: p for p in projects}
+
+    today_iso = now_utc().date().isoformat()
+    week_start = (now_utc().date() - timedelta(days=6)).isoformat()
+
+    entries = await db.time_entries.find(
+        {"org_id": org_id, "date": {"$gte": week_start}},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(2000)
+
+    now_ts = now_utc()
+
+    rows = []
+    for uid in user_ids:
+        u = umap.get(uid, {})
+        my_tasks = [t for t in tasks if t.get("assignee_id") == uid]
+        active_tasks = [t for t in my_tasks if t.get("status") != "done"]
+        in_progress = [t for t in my_tasks if t.get("status") == "in_progress"]
+
+        my_entries = [e for e in entries if e.get("user_id") == uid]
+        today_min = sum(e["minutes"] for e in my_entries if e.get("date") == today_iso)
+        week_min = sum(e["minutes"] for e in my_entries)
+
+        # active timer
+        tmr = timer_map.get(uid)
+        active_timer = None
+        if tmr:
+            started = datetime.fromisoformat(tmr["started_at"])
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed = max(0, int((now_ts - started).total_seconds()))
+            t_task = task_map.get(tmr["task_id"])
+            active_timer = {
+                "task_id": tmr["task_id"],
+                "task_title": t_task.get("title") if t_task else "Unknown task",
+                "project_key": project_map.get(t_task.get("project_id"), {}).get("key") if t_task else None,
+                "started_at": tmr["started_at"],
+                "elapsed_seconds": elapsed,
+            }
+
+        # recent activity (last 5 entries)
+        recent = []
+        for e in my_entries[:5]:
+            t_task = task_map.get(e["task_id"])
+            recent.append({
+                "task_id": e["task_id"],
+                "task_title": t_task.get("title") if t_task else "Deleted task",
+                "minutes": e["minutes"],
+                "date": e.get("date"),
+                "note": e.get("note", ""),
+                "created_at": e.get("created_at"),
+            })
+
+        rows.append({
+            "user_id": uid,
+            "name": u.get("name"),
+            "email": u.get("email"),
+            "picture": u.get("picture"),
+            "role": role_map.get(uid),
+            "active_timer": active_timer,
+            "active_count": len(active_tasks),
+            "in_progress_tasks": [
+                {"task_id": t["task_id"], "title": t["title"], "priority": t.get("priority"),
+                 "project_key": project_map.get(t.get("project_id"), {}).get("key"),
+                 "due_date": t.get("due_date")}
+                for t in in_progress[:5]
+            ],
+            "estimate_hours": sum(t.get("estimate_hours", 0) for t in active_tasks),
+            "logged_today_minutes": today_min,
+            "logged_week_minutes": week_min,
+            "recent_activity": recent,
+        })
+
+    # sort: those with active timer first, then by active count desc
+    rows.sort(key=lambda r: (r["active_timer"] is None, -r["active_count"]))
+    return {"generated_at": now_ts.isoformat(), "members": rows}
+
+
+# ----------------------
 # Analytics
 # ----------------------
 @api.get("/orgs/{org_id}/analytics")

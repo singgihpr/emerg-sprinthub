@@ -267,3 +267,83 @@ class TestSeedData:
         assert len(tasks) >= 5
         for t in tasks:
             assert "_id" not in t
+
+
+# ---------- Team Activity (new feature) ----------
+class TestTeamActivity:
+    state = {}
+
+    def test_team_activity_owner_200_and_shape(self, client, org_id):
+        r = client.get(f"{BASE_URL}/api/orgs/{org_id}/team-activity")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert "generated_at" in d and isinstance(d["generated_at"], str)
+        assert isinstance(d["members"], list) and d["members"]
+        for m in d["members"]:
+            for k in ["user_id", "name", "email", "role", "active_timer", "active_count",
+                      "in_progress_tasks", "estimate_hours", "logged_today_minutes",
+                      "logged_week_minutes", "recent_activity"]:
+                assert k in m, f"missing key {k}"
+            assert "_id" not in m and "password_hash" not in m
+            assert isinstance(m["active_count"], int)
+            assert isinstance(m["in_progress_tasks"], list)
+            assert isinstance(m["recent_activity"], list)
+            assert isinstance(m["estimate_hours"], (int, float))
+            assert isinstance(m["logged_today_minutes"], int)
+            assert isinstance(m["logged_week_minutes"], int)
+            for t in m["in_progress_tasks"]:
+                for k in ["task_id", "title", "priority", "project_key", "due_date"]:
+                    assert k in t
+            for e in m["recent_activity"]:
+                for k in ["task_id", "task_title", "minutes", "date", "note", "created_at"]:
+                    assert k in e
+
+    def test_active_timer_populated(self, client, org_id):
+        tasks = client.get(f"{BASE_URL}/api/orgs/{org_id}/tasks").json()
+        assert tasks
+        tid = tasks[0]["task_id"]
+        me = client.get(f"{BASE_URL}/api/auth/me").json()
+        my_uid = me["user_id"]
+        # ensure clean state
+        client.post(f"{BASE_URL}/api/orgs/{org_id}/timer/stop")
+        r = client.post(f"{BASE_URL}/api/orgs/{org_id}/timer/start", json={"task_id": tid})
+        assert r.status_code == 200, r.text
+        time.sleep(2)
+        d = client.get(f"{BASE_URL}/api/orgs/{org_id}/team-activity").json()
+        row = next(m for m in d["members"] if m["user_id"] == my_uid)
+        at = row["active_timer"]
+        assert at is not None, "active_timer not populated for running timer"
+        assert at["task_id"] == tid
+        assert at["task_title"] == tasks[0]["title"]
+        assert at["elapsed_seconds"] >= 1
+        assert isinstance(at["started_at"], str)
+        assert "project_key" in at
+        # timer holder sorted first
+        assert d["members"][0]["active_timer"] is not None
+        # cleanup
+        client.post(f"{BASE_URL}/api/orgs/{org_id}/timer/stop")
+        d2 = client.get(f"{BASE_URL}/api/orgs/{org_id}/team-activity").json()
+        row2 = next(m for m in d2["members"] if m["user_id"] == my_uid)
+        assert row2["active_timer"] is None
+
+    def test_member_role_forbidden(self, client, org_id):
+        email = f"test_qa_member_{int(time.time())}@example.com"
+        r = client.post(f"{BASE_URL}/api/orgs/{org_id}/members",
+                        json={"email": email, "name": "TEST_RegularMember", "role": "member"})
+        assert r.status_code == 200, r.text
+        TestTeamActivity.state["member_email"] = email
+        s = requests.Session()
+        lr = s.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": "Welcome@123"})
+        assert lr.status_code == 200, lr.text
+        tok = lr.json()["token"]
+        mr = requests.get(f"{BASE_URL}/api/orgs/{org_id}/team-activity",
+                          headers={"Authorization": f"Bearer {tok}"})
+        assert mr.status_code == 403, f"expected 403 got {mr.status_code}: {mr.text[:200]}"
+
+    def test_unauthenticated_401(self, org_id):
+        r = requests.get(f"{BASE_URL}/api/orgs/{org_id}/team-activity")
+        assert r.status_code == 401
+
+    def test_non_member_org_403(self, client):
+        r = client.get(f"{BASE_URL}/api/orgs/org_doesnotexist999/team-activity")
+        assert r.status_code == 403

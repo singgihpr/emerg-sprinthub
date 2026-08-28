@@ -11,7 +11,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   House, ListChecks, FolderOpen, Users, ChartBar, CaretUpDown, Plus,
-  SignOut, Buildings, Rocket,
+  SignOut, Buildings, Rocket, Pulse,
 } from "@phosphor-icons/react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import TaskTimer from "@/components/TaskTimer";
@@ -21,6 +21,7 @@ const NAV = [
   { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/projects", label: "Projects", icon: FolderOpen },
   { to: "/sprints", label: "Sprints", icon: Rocket },
+  { to: "/team", label: "Team Activity", icon: Pulse, roles: ["owner", "admin", "manager"] },
   { to: "/members", label: "Members", icon: Users },
   { to: "/analytics", label: "Analytics", icon: ChartBar },
 ];
@@ -75,7 +76,7 @@ export default function AppShell() {
         </div>
 
         <nav className="flex-1 p-3 space-y-1">
-          {NAV.map((it) => (
+          {NAV.filter((it) => !it.roles || it.roles.includes(currentOrg?.role)).map((it) => (
             <NavLink
               key={it.to} to={it.to}
               data-testid={`nav-${it.to.slice(1)}`}
