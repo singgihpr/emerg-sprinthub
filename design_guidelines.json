@@ -1,0 +1,150 @@
+{
+  "theme": "light",
+  "theme_strategy": "Modern Professional (Light Theme Priority). Soft Utility blended with Swiss Authority. High structural clarity, accessible contrast, and professional aesthetics tailored for prolonged workspace usage.",
+  "typography": {
+    "font_family_headings": "Outfit",
+    "font_family_body": "Inter",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tight font-semibold",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-medium",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-sm sm:text-base leading-relaxed",
+      "labels": "text-xs uppercase tracking-[0.2em] font-medium text-muted-foreground"
+    },
+    "rules": [
+      "NEVER use generic sans for headings. Use 'Outfit' for crisp, professional headers.",
+      "Headlines >32px must use tracking-tight.",
+      "Jump between headings must not exceed 2 Tailwind steps.",
+      "Line height: leading-none for headers, leading-relaxed for body."
+    ]
+  },
+  "colors": {
+    "palette_archetype": "The Swiss High-Contrast mixed with Soft Utility",
+    "backgrounds": {
+      "page": "bg-slate-50 (#F8FAFC) - Never pure white for the main canvas.",
+      "sidebar": "bg-white (#FFFFFF) with a 1px solid border-r border-slate-200.",
+      "card": "bg-white (#FFFFFF)",
+      "header": "bg-white/80 backdrop-blur-xl"
+    },
+    "text": {
+      "primary": "text-slate-900 (#0F172A)",
+      "secondary": "text-slate-500 (#64748B)"
+    },
+    "brand_primary": "bg-indigo-600 (#4F46E5) - Used strictly for primary CTAs (e.g., 'New Task', 'Start Timer').",
+    "accent_alert": "bg-orange-500 (#F97316) - Used for active time tracking or overdue tasks.",
+    "status_colors": {
+      "todo": "bg-slate-100 text-slate-700",
+      "in_progress": "bg-blue-100 text-blue-700",
+      "review": "bg-amber-100 text-amber-700",
+      "done": "bg-emerald-100 text-emerald-700"
+    },
+    "rules": [
+      "NO full-screen gradients. Color is for function and guiding action.",
+      "NEVER use pure #000000 or pure #808080.",
+      "Hover state color MUST be explicitly defined (e.g., hover:bg-indigo-700 hover:text-white).",
+      "Ensure minimum 4.5:1 contrast ratio for normal text."
+    ]
+  },
+  "visual_enhancers": {
+    "surfaces": [
+      "Neumorphism (Tactile): Used for dashboard widgets. Mix soft shadows with crisp 1px inner contrast borders (border-slate-100) to ensure accessibility.",
+      "Glassmorphism: Used for Sticky Navs and Overlays. Use high opacity bg-white/70 with backdrop-blur-xl and a delicate 1px border-slate-200/50.",
+      "Grid Borders: Expose the structural grid for data-heavy views (List, Workload)."
+    ],
+    "shadows": [
+      "Ambient: shadow-[0_8px_30px_rgb(0,0,0,0.04)] for cards.",
+      "Direct: shadow-sm for interactive elements."
+    ],
+    "border_radius": "max 8px (rounded-lg) for a professional, crisp feel. Never use fully rounded pills for content cards."
+  },
+  "components": {
+    "strategy": "Shadcn UI + Custom HTML/Tailwind for structural asymmetry.",
+    "specific_components": {
+      "sidebar": "Collapsible left-sidebar containing org-switcher, navigation links, and user profile.",
+      "org_switcher": "Dropdown menu in the top-left corner of sidebar. Include dummy organization logos.",
+      "time_tracker": "Floating or sticky widget in the top navigation or bottom right. Must have high-contrast active state (Orange).",
+      "task_views": {
+        "list": "Data table with border-collapse and subtle row hover effects.",
+        "kanban": "Horizontal scrolling flex container with distinct column backgrounds (bg-slate-50) and draggable card widgets.",
+        "gantt": "Timeline visualization using dense grid columns.",
+        "calendar": "Shadcn Calendar integrated into a full-page grid layout.",
+        "workload": "Bar charts or stacked capacity meters."
+      },
+      "forms": "Use Shadcn Input, Select, and Dialog for task creation and sprint planning."
+    },
+    "icons": "Use @phosphor-icons/react (Duotone or Regular) for a professional, clear aesthetic. Install via: yarn add @phosphor-icons/react",
+    "charts": "Use Shadcn charts (Recharts under the hood) for achievements, workload, and productivity metrics."
+  },
+  "grids_layouts": {
+    "strategy": "High Density Grid (For Dashboards/Analytics).",
+    "bento_protocol": {
+      "mode": "MODE B",
+      "base": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4",
+      "gap": "gap-4 or gap-6",
+      "rules": "Every pixel must be utilized. Use h-full on children to ensure they stretch. No jagged bottoms."
+    },
+    "spacing_scale": "Use generous padding inside containers. Cards must have p-6 or p-8.",
+    "alignment": "Left-align paragraphs, labels, dense content. Buttons align relative to their container."
+  },
+  "motion": {
+    "strategy": "Minimalist micro-interactions for feedback.",
+    "rules": [
+      "Add hover states (transform -translate-y-[2px], shadow-md) for task cards.",
+      "Use staggered entrance animations for list items.",
+      "Smooth state changes using targeted transitions (transition-colors, transition-transform) - NEVER use transition-all.",
+      "Respect prefers-reduced-motion."
+    ]
+  },
+  "accessibility": {
+    "contrast": "Minimum 4.5:1 for standard text. Minimum 3:1 for large text and interactive boundaries.",
+    "focus": "Focus states must have HIGHER contrast (e.g., focus:ring-2 focus:ring-indigo-500 focus:outline-none).",
+    "testing_attributes": "All interactive elements MUST include data-testid (e.g., data-testid='create-task-button').",
+    "charts": "Color-blind friendly palettes for productivity metrics."
+  },
+  "media": {
+    "image_urls": [
+      {
+        "category": "User Avatars (Team Members / Profiles)",
+        "url": "https://images.unsplash.com/photo-1740252117044-2af197eea287?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjB1c2VyJTIwYXZhdGFyJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzg3ODE2MjIwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "3D professional user avatar in blue"
+      },
+      {
+        "category": "User Avatars (Team Members / Profiles)",
+        "url": "https://images.pexels.com/photos/6146051/pexels-photo-6146051.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Real photo of a professional man in a suit for manager/admin role"
+      },
+      {
+        "category": "Organization / Company Logos",
+        "url": "https://images.unsplash.com/photo-1782723725302-d4e05aa16411?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBhYnN0cmFjdCUyMGNvbXBhbnklMjBsb2dvfGVufDB8fHx8MTc4NzgxNjIyMHww&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract blue tech logo (Org 1)"
+      },
+      {
+        "category": "Organization / Company Logos",
+        "url": "https://images.unsplash.com/photo-1770210217380-d78a69acdc77?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjBhYnN0cmFjdCUyMGNvbXBhbnklMjBsb2dvfGVufDB8fHx8MTc4NzgxNjIyMHww&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract circular AI logo (Org 2)"
+      }
+    ],
+    "rules": "Never use placeholder images. Use provided URLs. Apply appropriate object-cover and rounded-full classes for avatars."
+  },
+  "universal_guidelines": [
+    "You tend to converge toward generic outputs. Break the mold: make a creative, distinctive frontend.",
+    "Do not center-align the app container. Do not use `.App { text-align: center; }`.",
+    "NEVER use AI assistant Emoji characters (🤖🧠) for icons. Use Phosphor Icons.",
+    "Ensure the header/top navigation has a background (not completely transparent) if content scrolls beneath it.",
+    "Use 2-3x more spacing than feels comfortable. Prevent cramped UI.",
+    "Create depth through layered z-index hierarchies and crisp shadows.",
+    "Do not apply 'transition: all' globally. Use targeted transitions.",
+    "Prioritize pre-existing Shadcn components. Override styles (like h-9 for tabs) carefully using Tailwind."
+  ],
+  "instructions_to_main_agent": [
+    "Install required dependencies: `yarn add @phosphor-icons/react recharts date-fns`",
+    "Configure Shadcn UI if not already done, prioritizing standard components: button, input, select, dialog, tabs, dropdown-menu, avatar, table, calendar, popover.",
+    "Structure the layout with a fixed left Sidebar and a main content area with a sticky top header.",
+    "Implement the 5 views (List, Board, Gantt, Calendar, Workload) using a Tabs-like or Sub-nav switcher.",
+    "Implement the Time Tracker with state management (Start/Stop). It should visually indicate when active (e.g., using the orange accent color).",
+    "Build the dashboard tab containing summary metrics and charts (productivity, completed tasks) using recharts.",
+    "Use the provided image URLs for user avatars in the header, task assignees, and the organization switcher.",
+    "Mock the authentication flow if no real backend is provided. The multi-org switcher should just toggle state in the frontend mockup."
+  ]
+}

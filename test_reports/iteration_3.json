@@ -1,0 +1,39 @@
+{
+  "summary": "Follow-up verification of iteration_2 fixes. Backend: 23/23 pytest tests pass (auth+cookie, org/project/sprint/task/time-entry/timer POSTs all return 200 with no _id, PATCH/DELETE, access control 401/403, 422 validation, analytics, seed data). Frontend: BUG FIX CONFIRMED — after creating a workspace via org-switcher, zero radix popper wrappers remain mounted and nav-tasks/nav-projects/nav-sprints/nav-members are immediately clickable with normal (non-forced) clicks. Full happy path re-verified: login, org switch back to Acme Corp, all 6 pages navigate, task created and visible in list, all 5 task views render, timer starts (live ticking 00:02 -> 00:05), stop removes widget and logs time, logout redirects to /login. Test data cleaned from DB (Acme Corp only, 6 tasks).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "CORS middleware", "issue": "allow_origins=['*'] with allow_credentials=True is invalid per spec; masked only because frontend/backend share origin. Use explicit origin from env. (carried over)"},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout after 5 failed attempts (auth playbook expectation). (carried over)"},
+      {"endpoint": "POST /api/orgs/{org_id}/tasks", "issue": "project_id/sprint_id not validated against the org — orphan task 'Bug fix test' still shows project key '—' in the seeded org. (carried over)"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dialogs (TaskDialog etc.)", "issues": ["React warning still present: 'Missing Description or aria-describedby={undefined} for DialogContent' — add DialogDescription", "TaskDialog still uses native <input type='date'> instead of shadcn Calendar/Popover"]},
+      {"screen": "AppShell org switcher button", "issues": ["Accessible text concatenates without separators ('AAcme Corpowner') — minor, only affects screen readers/tests"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Add DialogDescription / aria-describedby to dialogs (low)",
+    "Replace CORS wildcard with explicit origin(s) since allow_credentials=True (low)",
+    "Validate project_id/sprint_id belong to org in POST/PATCH /tasks (low)"
+  ],
+  "critical_code_review_comments": [
+    "insert_and_get() helper in server.py remains defined but unused — delete or adopt everywhere (dead code).",
+    "start_timer still reads task_id from a raw request body instead of a Pydantic model — add a TimerStart model for validation/typing.",
+    "Task status/priority/type are unconstrained strings — use Literal/Enum so invalid values can't break Kanban/analytics buckets.",
+    "PATCH /tasks strips None values, so fields (assignee, due_date) can never be unset."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "100% (all tested flows incl. previously blocking org-switcher)"},
+  "seed_data_creation": "Created and fully removed: TEST_Org_QA, QA WS Fix3 orgs (+their projects/sprints/memberships), task 'QA Regress Task 3', test_qa_* user. DB restored to seeded Acme Corp state (6 tasks).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "widiardhana@gmail.com / Admin@1234 (works; httpOnly access_token cookie set)",
+  "context_for_next_testing_agent": "Regression suite: cd /app/backend && python -m pytest tests/backend_test.py -v. Login page testids are input-email/input-password/submit-auth-btn (NOT login-email/login-submit). Mongo collections are 'organizations' and 'active_timers'. Org-switcher overlay bug from iteration_2 is fixed and re-verified. Only cosmetic/low-priority items remain.",
+  "rca_of_the_issue": "Org-switcher blocking bug resolved: DropdownMenu is now controlled via orgMenuOpen and create-org-menu's onSelect calls setOrgMenuOpen(false) before opening the dialog, so Radix unmounts the popper content (verified 0 [data-radix-popper-content-wrapper] nodes after submit) and pointer events reach the sidebar. Timer start endpoint refactor verified: POST /timer/start returns clean JSON and /timer/stop increments logged_minutes correctly."
+}
