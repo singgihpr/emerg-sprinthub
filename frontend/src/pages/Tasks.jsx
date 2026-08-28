@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useOrg } from "@/context/OrgContext";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users } from "@phosphor-icons/react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users, User } from "@phosphor-icons/react";
 import TaskDialog from "@/components/TaskDialog";
 import ListView from "@/components/views/ListView";
 import BoardView from "@/components/views/BoardView";
@@ -22,12 +24,14 @@ const VIEWS = [
 
 export default function Tasks() {
   const { currentOrg } = useOrg();
+  const { user } = useAuth();
   const [view, setView] = useState("list");
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
   const [members, setMembers] = useState([]);
   const [sprints, setSprints] = useState([]);
   const [query, setQuery] = useState("");
+  const [assignee, setAssignee] = useState(() => localStorage.getItem("task_assignee_filter") || "all");
   const [dialog, setDialog] = useState({ open: false, task: null });
 
   const load = useCallback(async () => {
@@ -48,7 +52,15 @@ export default function Tasks() {
     return () => window.removeEventListener("data-changed", h);
   }, [load]);
 
-  const filtered = tasks.filter((t) => !query || t.title.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => { localStorage.setItem("task_assignee_filter", assignee); }, [assignee]);
+
+  const filtered = tasks.filter((t) => {
+    if (query && !t.title.toLowerCase().includes(query.toLowerCase())) return false;
+    if (assignee === "all") return true;
+    if (assignee === "me") return t.assignee_id === user?.user_id;
+    if (assignee === "unassigned") return !t.assignee_id;
+    return t.assignee_id === assignee;
+  });
 
   const props = { tasks: filtered, projects, members, sprints, onEdit: (task) => setDialog({ open: true, task }), reload: load };
 
@@ -76,9 +88,27 @@ export default function Tasks() {
             ))}
           </TabsList>
         </Tabs>
-        <div className="relative">
-          <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tasks…" className="pl-9 h-10 w-64" data-testid="task-search" />
+        <div className="flex items-center gap-2">
+          <Select value={assignee} onValueChange={setAssignee}>
+            <SelectTrigger className="h-10 w-52 bg-white" data-testid="assignee-filter">
+              <User size={14} className="mr-1 text-slate-400" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="filter-all">All assignees</SelectItem>
+              <SelectItem value="me" data-testid="filter-me">Assigned to me</SelectItem>
+              <SelectItem value="unassigned">Unassigned</SelectItem>
+              {members
+                .filter((m) => m.user_id !== user?.user_id)
+                .map((m) => (
+                  <SelectItem key={m.user_id} value={m.user_id}>{m.name || m.email}</SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          <div className="relative">
+            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tasks…" className="pl-9 h-10 w-64" data-testid="task-search" />
+          </div>
         </div>
       </div>
 
