@@ -46,7 +46,8 @@ def org_id(client):
     assert r.status_code == 200, r.text
     orgs = r.json()
     assert isinstance(orgs, list) and orgs
-    return orgs[0]["org_id"]
+    seeded = next((o for o in orgs if o["name"] == "Acme Corp"), orgs[0])
+    return seeded["org_id"]
 
 
 # ---------- Auth ----------
@@ -496,8 +497,11 @@ class TestComments:
         assert r.status_code == 401
 
     def test_comments_403_non_member(self, client):
+        # iteration 7: require_task_access() resolves the task first, so an unknown
+        # org+task now yields 404 (task not found) instead of 403. Both are acceptable
+        # denials; no org data is leaked (real tasks in a foreign org still 403).
         r = client.get(f"{BASE_URL}/api/orgs/org_doesnotexist999/tasks/t1/comments")
-        assert r.status_code == 403
+        assert r.status_code in (403, 404), f"got {r.status_code}: {r.text[:200]}"
 
     def test_empty_body_validation(self, client, org_id):
         tid = TestComments.state["task_id"]

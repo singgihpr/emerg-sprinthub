@@ -72,9 +72,11 @@ export default function Tasks() {
           <h1 className="font-display text-4xl font-semibold tracking-tight mt-1">Tasks</h1>
           <p className="text-sm text-slate-500 mt-2">Sprint backlog & routine work — pick your view.</p>
         </div>
-        <Button className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={() => setDialog({ open: true, task: null })} data-testid="new-task-btn">
-          <Plus size={16} weight="bold" /> New task
-        </Button>
+        {projects.length > 0 && (
+          <Button className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={() => setDialog({ open: true, task: null })} data-testid="new-task-btn">
+            <Plus size={16} weight="bold" /> New task
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3 justify-between">

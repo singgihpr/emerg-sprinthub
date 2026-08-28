@@ -139,6 +139,15 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = ""
     color: Optional[str] = "#4F46E5"
 
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+
+class ProjectMemberAdd(BaseModel):
+    user_id: str
+    role: Optional[str] = "member"  # member/lead
+
 class SprintCreate(BaseModel):
     project_id: str
     name: str
@@ -297,7 +306,7 @@ async def google_session(request: Request, response: Response):
 async def list_orgs(user: dict = Depends(get_current_user)):
     memberships = await db.memberships.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(500)
     org_ids = [m["org_id"] for m in memberships]
-    orgs = await db.organizations.find({"org_id": {"$in": org_ids}}, {"_id": 0}).to_list(500)
+    orgs = await db.organizations.find({"org_id": {"$in": org_ids}}, {"_id": 0}).sort("created_at", 1).to_list(500)
     role_map = {m["org_id"]: m["role"] for m in memberships}
     for o in orgs:
         o["role"] = role_map.get(o["org_id"])
@@ -367,14 +376,44 @@ async def invite_member(org_id: str, body: MemberInvite, user: dict = Depends(ge
 # ----------------------
 # Projects
 # ----------------------
+async def _get_accessible_project_ids(org_id: str, user_id: str, role: str) -> Optional[List[str]]:
+    """Return None if user can access ALL projects (owner/admin); otherwise the list of project_ids they belong to."""
+    if role in ("owner", "admin"):
+        return None
+    pm = await db.project_members.find({"org_id": org_id, "user_id": user_id}, {"_id": 0}).to_list(500)
+    return [p["project_id"] for p in pm]
+
+async def require_project_access(org_id: str, project_id: str, user: dict) -> dict:
+    """Ensure user is org member AND can access the given project. Returns membership."""
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin"):
+        pm = await db.project_members.find_one({"org_id": org_id, "project_id": project_id, "user_id": user["user_id"]})
+        if not pm:
+            raise HTTPException(status_code=403, detail="No access to this project")
+    return m
+
+async def require_task_access(org_id: str, task_id: str, user: dict) -> dict:
+    """Fetch task and check project access. Returns the task doc."""
+    task = await db.tasks.find_one({"task_id": task_id, "org_id": org_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    await require_project_access(org_id, task["project_id"], user)
+    return task
+
 @api.get("/orgs/{org_id}/projects")
 async def list_projects(org_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
-    return await db.projects.find({"org_id": org_id}, {"_id": 0}).to_list(500)
+    m = await ensure_member(org_id, user["user_id"])
+    allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
+    q = {"org_id": org_id}
+    if allowed is not None:
+        q["project_id"] = {"$in": allowed}
+    return await db.projects.find(q, {"_id": 0}).to_list(500)
 
 @api.post("/orgs/{org_id}/projects")
 async def create_project(org_id: str, body: ProjectCreate, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
     doc = {
         "project_id": new_id("prj"), "org_id": org_id,
         "name": body.name, "key": body.key.upper(),
@@ -382,20 +421,85 @@ async def create_project(org_id: str, body: ProjectCreate, user: dict = Depends(
         "created_by": user["user_id"], "created_at": now_utc().isoformat()
     }
     await db.projects.insert_one(dict(doc))
+    # creator becomes a project member (as lead)
+    await db.project_members.insert_one({
+        "org_id": org_id, "project_id": doc["project_id"], "user_id": user["user_id"],
+        "role": "lead", "added_at": now_utc().isoformat(), "added_by": user["user_id"]
+    })
     doc.pop("_id", None)
     return doc
+
+@api.patch("/orgs/{org_id}/projects/{project_id}")
+async def update_project(org_id: str, project_id: str, body: ProjectUpdate, user: dict = Depends(get_current_user)):
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    result = await db.projects.update_one({"project_id": project_id, "org_id": org_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return await db.projects.find_one({"project_id": project_id}, {"_id": 0})
+
+@api.get("/orgs/{org_id}/projects/{project_id}/members")
+async def list_project_members(org_id: str, project_id: str, user: dict = Depends(get_current_user)):
+    await require_project_access(org_id, project_id, user)
+    members = await db.project_members.find({"org_id": org_id, "project_id": project_id}, {"_id": 0}).to_list(500)
+    user_ids = [m["user_id"] for m in members]
+    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "password_hash": 0}).to_list(500)
+    umap = {u["user_id"]: u for u in users}
+    out = []
+    for m in members:
+        u = umap.get(m["user_id"], {})
+        out.append({**u, "project_role": m.get("role", "member"), "added_at": m.get("added_at")})
+    return out
+
+@api.post("/orgs/{org_id}/projects/{project_id}/members")
+async def add_project_member(org_id: str, project_id: str, body: ProjectMemberAdd, user: dict = Depends(get_current_user)):
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
+    # user must be an org member
+    target = await db.memberships.find_one({"org_id": org_id, "user_id": body.user_id})
+    if not target:
+        raise HTTPException(status_code=400, detail="User is not a member of the organization")
+    existing = await db.project_members.find_one({"org_id": org_id, "project_id": project_id, "user_id": body.user_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Already a project member")
+    doc = {
+        "org_id": org_id, "project_id": project_id, "user_id": body.user_id,
+        "role": body.role or "member", "added_at": now_utc().isoformat(),
+        "added_by": user["user_id"]
+    }
+    await db.project_members.insert_one(dict(doc))
+    return {"ok": True}
+
+@api.delete("/orgs/{org_id}/projects/{project_id}/members/{user_id}")
+async def remove_project_member(org_id: str, project_id: str, user_id: str, user: dict = Depends(get_current_user)):
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
+    await db.project_members.delete_one({"org_id": org_id, "project_id": project_id, "user_id": user_id})
+    return {"ok": True}
 
 # ----------------------
 # Sprints
 # ----------------------
 @api.get("/orgs/{org_id}/sprints")
 async def list_sprints(org_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
-    return await db.sprints.find({"org_id": org_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    m = await ensure_member(org_id, user["user_id"])
+    allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
+    q = {"org_id": org_id}
+    if allowed is not None:
+        q["project_id"] = {"$in": allowed}
+    return await db.sprints.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 @api.post("/orgs/{org_id}/sprints")
 async def create_sprint(org_id: str, body: SprintCreate, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    m = await require_project_access(org_id, body.project_id, user)
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
     doc = {
         "sprint_id": new_id("spr"), "org_id": org_id, "project_id": body.project_id,
         "name": body.name, "goal": body.goal,
@@ -411,12 +515,16 @@ async def create_sprint(org_id: str, body: SprintCreate, user: dict = Depends(ge
 # ----------------------
 @api.get("/orgs/{org_id}/tasks")
 async def list_tasks(org_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
-    return await db.tasks.find({"org_id": org_id}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    m = await ensure_member(org_id, user["user_id"])
+    allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
+    q = {"org_id": org_id}
+    if allowed is not None:
+        q["project_id"] = {"$in": allowed}
+    return await db.tasks.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 @api.post("/orgs/{org_id}/tasks")
 async def create_task(org_id: str, body: TaskCreate, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    await require_project_access(org_id, body.project_id, user)
     doc = {
         "task_id": new_id("tsk"), "org_id": org_id,
         "project_id": body.project_id, "title": body.title,
@@ -436,7 +544,7 @@ async def create_task(org_id: str, body: TaskCreate, user: dict = Depends(get_cu
 
 @api.patch("/orgs/{org_id}/tasks/{task_id}")
 async def update_task(org_id: str, task_id: str, body: TaskUpdate, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    await require_task_access(org_id, task_id, user)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     updates["updated_at"] = now_utc().isoformat()
     if updates.get("status") == "done":
@@ -448,7 +556,7 @@ async def update_task(org_id: str, task_id: str, body: TaskUpdate, user: dict = 
 
 @api.delete("/orgs/{org_id}/tasks/{task_id}")
 async def delete_task(org_id: str, task_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    await require_task_access(org_id, task_id, user)
     await db.tasks.delete_one({"task_id": task_id, "org_id": org_id})
     await db.time_entries.delete_many({"task_id": task_id})
     return {"ok": True}
@@ -458,12 +566,17 @@ async def delete_task(org_id: str, task_id: str, user: dict = Depends(get_curren
 # ----------------------
 @api.get("/orgs/{org_id}/time-entries")
 async def list_time_entries(org_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
-    return await db.time_entries.find({"org_id": org_id}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    m = await ensure_member(org_id, user["user_id"])
+    allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
+    q = {"org_id": org_id}
+    if allowed is not None:
+        tasks = await db.tasks.find({"org_id": org_id, "project_id": {"$in": allowed}}, {"_id": 0}).to_list(5000)
+        q["task_id"] = {"$in": [t["task_id"] for t in tasks]}
+    return await db.time_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 @api.post("/orgs/{org_id}/time-entries")
 async def create_time_entry(org_id: str, body: TimeEntryCreate, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    await require_task_access(org_id, body.task_id, user)
     doc = {
         "entry_id": new_id("te"), "org_id": org_id,
         "task_id": body.task_id, "user_id": user["user_id"],
@@ -485,11 +598,11 @@ async def get_timer(org_id: str, user: dict = Depends(get_current_user)):
 
 @api.post("/orgs/{org_id}/timer/start")
 async def start_timer(org_id: str, request: Request, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
     body = await request.json()
     task_id = body.get("task_id")
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id required")
+    await require_task_access(org_id, task_id, user)
     await db.active_timers.delete_many({"org_id": org_id, "user_id": user["user_id"]})
     doc = {
         "timer_id": new_id("tmr"), "org_id": org_id,
@@ -684,7 +797,7 @@ MENTION_RE = _re.compile(r"@([\w.+-]+@[\w-]+\.[\w.-]+)")
 
 @api.get("/orgs/{org_id}/tasks/{task_id}/comments")
 async def list_comments(org_id: str, task_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
+    await require_task_access(org_id, task_id, user)
     comments = await db.comments.find({"org_id": org_id, "task_id": task_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
     author_ids = list({c["author_id"] for c in comments})
     authors = await db.users.find({"user_id": {"$in": author_ids}}, {"_id": 0, "password_hash": 0}).to_list(500)
@@ -698,10 +811,7 @@ async def list_comments(org_id: str, task_id: str, user: dict = Depends(get_curr
 
 @api.post("/orgs/{org_id}/tasks/{task_id}/comments")
 async def create_comment(org_id: str, task_id: str, body: CommentCreate, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
-    task = await db.tasks.find_one({"task_id": task_id, "org_id": org_id}, {"_id": 0})
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = await require_task_access(org_id, task_id, user)
     if not body.body.strip():
         raise HTTPException(status_code=422, detail="Comment cannot be empty")
     mentions = list({m.lower() for m in MENTION_RE.findall(body.body)})
@@ -728,9 +838,17 @@ async def create_comment(org_id: str, task_id: str, body: CommentCreate, user: d
 # ----------------------
 @api.get("/orgs/{org_id}/analytics")
 async def analytics(org_id: str, user: dict = Depends(get_current_user)):
-    await ensure_member(org_id, user["user_id"])
-    tasks = await db.tasks.find({"org_id": org_id}, {"_id": 0}).to_list(5000)
-    entries = await db.time_entries.find({"org_id": org_id}, {"_id": 0}).to_list(5000)
+    m = await ensure_member(org_id, user["user_id"])
+    allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
+    tq = {"org_id": org_id}
+    if allowed is not None:
+        tq["project_id"] = {"$in": allowed}
+    tasks = await db.tasks.find(tq, {"_id": 0}).to_list(5000)
+    accessible_task_ids = [t["task_id"] for t in tasks]
+    eq = {"org_id": org_id}
+    if allowed is not None:
+        eq["task_id"] = {"$in": accessible_task_ids}
+    entries = await db.time_entries.find(eq, {"_id": 0}).to_list(5000)
     by_status = {"todo": 0, "in_progress": 0, "review": 0, "done": 0}
     for t in tasks:
         s = t.get("status", "todo")
@@ -983,6 +1101,10 @@ async def startup():
             "color": "#4F46E5", "created_by": user_id,
             "created_at": now_utc().isoformat()
         })
+        await db.project_members.insert_one({
+            "org_id": org_id, "project_id": prj_id, "user_id": user_id,
+            "role": "lead", "added_at": now_utc().isoformat(), "added_by": user_id
+        })
         spr_id = new_id("spr")
         await db.sprints.insert_one({
             "sprint_id": spr_id, "org_id": org_id, "project_id": prj_id,
@@ -1016,6 +1138,15 @@ async def startup():
         # update password to match .env
         if not verify_password(admin_password, existing["password_hash"]):
             await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
+    # Backfill: ensure every project has its creator as a project_member (idempotent)
+    all_projects = await db.projects.find({}, {"_id": 0}).to_list(5000)
+    for p in all_projects:
+        exists = await db.project_members.find_one({"org_id": p["org_id"], "project_id": p["project_id"], "user_id": p.get("created_by")})
+        if not exists and p.get("created_by"):
+            await db.project_members.insert_one({
+                "org_id": p["org_id"], "project_id": p["project_id"], "user_id": p["created_by"],
+                "role": "lead", "added_at": now_utc().isoformat(), "added_by": p["created_by"]
+            })
     logger.info("Startup complete")
 
 @app.on_event("shutdown")

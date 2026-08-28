@@ -1,0 +1,77 @@
+{
+  "summary": "Tested project editing + project-member management + task/project visibility filtering (backend & frontend) plus full regression. 64/70 backend tests pass. All requested features work as specified (PATCH project, project member CRUD, auto-lead on create, member-scoped GET /projects and GET /tasks, Projects Edit dialog with Details/Members tabs, Sprints project link). 6 failures are NEW authorization gaps I discovered: the project-scoping rule is only applied to the two list endpoints, so GET /sprints and GET /analytics still leak all org data to a plain member, and object-level endpoints (PATCH/DELETE task, task comments, project-member roster) are not scoped at all — a member with zero projects could read comments and PATCH/DELETE a task in a project they don't belong to.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PATCH /api/orgs/{org_id}/tasks/{task_id} and DELETE /api/orgs/{org_id}/tasks/{task_id}", "issue": "No project-membership check. A plain 'member' who belongs to NO project successfully changed a seeded task's status to 'done' (200) and deleted a task (200) in the Web Redesign project. list_tasks hides them but the mutation endpoints do not. Fix: resolve _get_accessible_project_ids and 403/404 when task.project_id is not accessible.", "priority": "CRITICAL"},
+      {"endpoint": "GET/POST /api/orgs/{org_id}/tasks/{task_id}/comments", "issue": "Any org member can read/post comments on tasks of projects they are not a member of (returned 200). Same missing project scoping.", "priority": "HIGH"},
+      {"endpoint": "GET /api/orgs/{org_id}/sprints", "issue": "Not filtered by accessible projects. Member with 0 projects still receives Sprint 1 (name, goal, dates) of the inaccessible Web Redesign project. Visible in UI: Sprints page renders the sprint card with project name '—'.", "priority": "HIGH"},
+      {"endpoint": "GET /api/orgs/{org_id}/analytics", "issue": "Not filtered. Member with 0 projects sees total_tasks=6, completion rate, logged minutes and time series for the whole org — contradicts the new visibility rule.", "priority": "HIGH"},
+      {"endpoint": "GET /api/orgs/{org_id}/projects/{project_id}/members", "issue": "Only calls ensure_member(org). Any org member can enumerate the member roster (name/email/picture) of any project, including ones they cannot see. Should require project membership or manager+.", "priority": "MEDIUM"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/orgs", "issue": "No deterministic sort (no .sort on created_at). Org order can change between calls, which makes the frontend's default org selection non-deterministic. It also broke test fixtures using orgs[0]."},
+      {"endpoint": "DELETE /api/orgs/{org_id}/projects/{project_id}/members/{user_id}", "issue": "Returns 200 {'ok': true} even when the user is not a project member and even for a non-existent project_id. Consider 404 on deleted_count == 0."},
+      {"endpoint": "PATCH /api/orgs/{org_id}/projects/{project_id}", "issue": "Role check runs before existence check, so a 'member' hitting an unknown project gets 403 rather than 404 (acceptable, noted only). Also no key/uniqueness update path and no validation that color is a hex value."},
+      {"endpoint": "POST /api/orgs/{org_id}/projects/{project_id}/members", "issue": "role is a free-form string; role='superadmin' or any junk is accepted. Should be Literal['member','lead']."},
+      {"endpoint": "POST /api/orgs/{org_id}/projects/{project_id}/members", "issue": "project_id existence is never validated — you can create project_member rows for a non-existent project (returns 200)."},
+      {"endpoint": "DELETE project members", "issue": "Nothing prevents removing the last 'lead'. A project can end up with 0 members, after which no manager can see or manage it (only owner/admin)."},
+      {"endpoint": "N/A", "issue": "There is no DELETE /projects/{id} endpoint, so test/junk projects (e.g. 'Test Prj') accumulate and cannot be cleaned from the UI."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProjectDialog (Members tab)", "issue": "Empty state is wrong: when projectMembers.length === 0 it renders 'Loading…' permanently. A project with genuinely zero members shows 'Loading…' forever. Needs separate loading vs empty state.", "selector": "[data-testid='project-tab-members']", "priority": "MEDIUM"},
+      {"component": "ProjectDialog (tab label)", "issue": "Members tab label renders 'Members (…)' until the tab is first opened (projectMembers.length || '…'), which looks like a broken count on the Details tab.", "selector": "[data-testid='project-tab-members']", "priority": "LOW"},
+      {"component": "ProjectDialog", "issue": "No error handling anywhere: save(), addMember() and removeMember() have no try/catch or toast. A 403/400 (e.g. 'Already a project member', or manager hitting a restricted action) fails completely silently — the dialog just stays open with no feedback. Also no success toast.", "selector": "[data-testid='project-save-changes-btn'], [data-testid='add-project-member-btn']", "priority": "HIGH"},
+      {"component": "Sprints page", "issue": "sprint-project-link renders '— ' and is a clickable no-op button when the parent project is not in the user's visible list (member role). Confirmed: clicking it does nothing, no dialog. Should be hidden/disabled.", "selector": "[data-testid='sprint-project-link-{sprint_id}']", "priority": "MEDIUM"},
+      {"component": "Projects page (member role)", "issue": "'New project' button is shown to role='member', but POST returns 403 and save() has no catch — clicking Create silently does nothing. Either hide the button for members or surface the error.", "selector": "[data-testid='new-project-btn']", "priority": "MEDIUM"},
+      {"component": "Projects page empty state", "issue": "For a member with no projects the copy is 'No projects yet. Create one to get started.' — misleading; they are not allowed to create and projects do exist.", "selector": "[data-testid^='project-card-']", "priority": "LOW"},
+      {"component": "ProjectDialog / DialogContent", "issue": "React a11y console warning on every open: \"Missing `Description` or `aria-describedby={undefined}` for {DialogContent}\". Add DialogDescription.", "selector": "[role='dialog']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Add / remove project member", "issue": "Works end-to-end (list refreshes correctly), but removal uses window.confirm() instead of an AlertDialog — inconsistent with the shadcn UI used everywhere else.", "affected_selectors": ["[data-testid='add-project-member-btn']", "[data-testid^='remove-project-member-']"]},
+      {"flow": "Project rename", "issue": "PATCH + list refresh works, but sibling pages (Tasks/Sprints/Dashboard) hold their own copies of projects and are not invalidated, so a rename made from the Sprints dialog is only reflected after that page's own reload.", "affected_selectors": ["[data-testid='project-save-changes-btn']"]}
+    ],
+    "design_issues": [
+      {"screen": "ProjectDialog Details tab", "issues": ["Native <input type='color'> swatch is used (browser default picker) instead of a styled/shadcn control — inconsistent with the rest of the design system.", "No character/format hint or validation for the color field."]},
+      {"screen": "ProjectDialog Members tab", "issues": ["'Add' button is disabled but styled solid indigo, so it reads as enabled (low affordance) until a member is picked."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_project_members.py",
+    "/app/backend/tests/test_member_leakage.py",
+    "/app/backend/tests/test_object_acl.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Apply _get_accessible_project_ids scoping to object-level task endpoints — PATCH /tasks/{id}, DELETE /tasks/{id}, GET/POST /tasks/{id}/comments — return 403/404 when the task's project is not accessible.",
+    "HIGH: Filter GET /orgs/{org_id}/sprints and GET /orgs/{org_id}/analytics by accessible project ids so a member cannot see sprint/analytics data for projects they don't belong to.",
+    "MEDIUM: Restrict GET /projects/{id}/members to project members or manager+.",
+    "HIGH: Add try/catch + toast (error and success) to ProjectDialog.save/addMember/removeMember; currently all failures are silent.",
+    "MEDIUM: ProjectDialog Members tab — distinguish loading from empty (currently always 'Loading…' at length 0); drop the '(…)' tab count placeholder.",
+    "MEDIUM: Sprints page — hide/disable sprint-project-link when the parent project is not in the visible project list (currently a dead button showing '—').",
+    "MEDIUM: Hide 'New project' from role='member' on Projects page (or handle the 403).",
+    "LOW: Validate ProjectMemberAdd.role as Literal['member','lead']; validate project existence in add_project_member; add deterministic sort to GET /orgs; add DialogDescription for a11y."
+  ],
+  "critical_code_review_comments": [
+    "The new visibility rule is enforced only in list_projects and list_tasks. Every other read/write path that touches a project-scoped document (sprints, analytics, task PATCH/DELETE, comments, project member roster) still only calls ensure_member(org_id), so the rule is bypassable. Centralise it: a dependency/helper like `require_project_access(org_id, project_id, user)` used by all project-scoped routes.",
+    "add_project_member does not verify the project exists nor constrain `role`, so orphan/invalid project_member rows can be created.",
+    "No safeguard against removing the last project lead — the project becomes invisible/unmanageable for manager-role users.",
+    "ProjectDialog has zero error state handling, violating the 'every API call needs loading/success/error states' rule.",
+    "GET /orgs returns an unsorted list; the frontend picks a default org from it, so org selection is non-deterministic."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_project_members.py",
+    "/app/backend/tests/test_member_leakage.py",
+    "/app/backend/tests/test_object_acl.py",
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "91% (64/70 — 6 failures are the newly found ACL gaps, no regressions)", "frontend": "100% of requested new flows passed; 7 UI/robustness defects logged"},
+  "seed_data_creation": "No new permanent seed data. Cleaned up leftovers from earlier iterations: deleted 5 stray TEST_Org_QA orgs (and their memberships/projects/sprints/comments) and 6 TEST_ projects; restored 'Daily standup' status back to 'todo' after the ACL probe mutated it. Remaining DB state: org 'Acme Corp', projects 'Web Redesign' + 'Test Prj' (leftover from an earlier iteration, no delete endpoint exists), 1 sprint, 6 tasks, 2 project_members (admin as lead in both projects). IMPORTANT: test_qa_member_1787903479@example.com is currently a member of NO project, so it correctly sees 0 tasks / 0 projects.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Both credentials in /app/memory/test_credentials.md work: widiardhana@gmail.com / Admin@1234 (owner) and test_qa_member_1787903479@example.com / Welcome@123 (member).",
+  "context_for_next_testing_agent": "Backend suites: tests/backend_test.py (regression, 47 tests), tests/test_project_members.py (16 tests, all pass — PATCH project, member CRUD, auto-lead, list filtering), tests/test_member_leakage.py (list-level leaks: sprints + analytics FAIL), tests/test_object_acl.py (object-level ACL: 4 FAIL). Fixtures now select the org named 'Acme Corp' instead of orgs[0] because /api/orgs is unsorted and test orgs polluted index 0 — keep that pattern. test_object_acl mutates/creates tasks; /tmp/restore.py-style status restore may be needed if it runs against seeded tasks (expected statuses: Daily standup=todo, Fix mobile nav bug=done, Write copy for pricing page=review, Set up analytics=todo, Design homepage hero=in_progress). Frontend flows already verified: admin login, Projects Edit dialog (rename+persist, Details/Members tabs, add member, remove member with confirm), Sprints project link opening ProjectDialog, member role seeing 0 tasks/0 projects.",
+  "rca_of_the_issue": "The feature added project-level scoping via _get_accessible_project_ids but wired it into only two handlers (list_projects, list_tasks). All other routes still authorize with ensure_member(org_id, user_id), which merely proves org membership. Reproduction: (1) as owner, DELETE /api/orgs/{org}/projects/{prj}/members/{member_uid} so the member belongs to no project; (2) as that member GET /api/orgs/{org}/tasks -> [] (correct); (3) as that member PATCH /api/orgs/{org}/tasks/{a_task_in_prj} {\"status\":\"done\"} -> 200 and the task is actually modified; likewise GET .../tasks/{id}/comments -> 200, GET .../projects/{prj}/members -> 200, GET .../sprints -> full list, GET .../analytics -> org-wide totals. Mitigation: introduce one shared authorization helper that resolves the accessible project id set (None for owner/admin) and call it in every project-scoped route, filtering queries and raising 403/404 for single-object access."
+}

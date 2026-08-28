@@ -1,0 +1,61 @@
+{
+  "summary": "Iteration 9 verified the two final ACL fixes (create_time_entry + start_timer now call require_task_access) and the relaxed Tasks-page create guard. Backend: 126/126 pytest tests pass across 8 suites, run serially (`cd /app/backend && python -m pytest tests/ -n 0 -q`). New suite tests/test_iter9_acl.py (18 tests) proves: DETACHED member (0 project memberships) -> POST /time-entries 403 (no row persisted, logged_minutes untouched), POST /timer/start 403, POST /timer/start without task_id 400, POST /time-entries with unknown task_id 404, plus all iteration 6/7/8 regressions still hold (projects/tasks/sprints/time-entries all [], analytics total_tasks=0, PATCH/DELETE task 403, comments GET/POST 403, POST /tasks 403, POST /sprints 403, project roster 403, PATCH project 403). AFTER RE-ATTACH to 'Web Redesign': member POST /tasks 200 (persisted + visible, no _id leak), POST /time-entries 200, POST /timer/start 200 -> GET /timer shows it -> POST /timer/stop 200 (timer cleared), and a task in a project the member is NOT in still returns 403 on time-entries/timer-start/task-create. POST /sprints still 403 (manager+ role). Owner regression 200 on task create + time entry + timer start/stop + delete. The 2 intentional failures in tests/test_iter8_scoping.py were re-pointed at the new intended behaviour (time-entry 403, member task create 200) and now pass. Frontend (Playwright, 0 console errors on every page): attached member sees new-task-btn, created a task via the dialog end-to-end, ran start-timer -> timer-widget -> timer-stop-btn; detached member sees NO new-task-btn / new-sprint-btn / new-project-btn. Owner: all 5 task views render, kanban drag Todo->Review persisted across reload, comment with @mention posted, sprint burndown dialog renders chart + Total tasks/Est./Duration, /projects /sprints /members /team /analytics /dashboard all load, ProjectDialog rename shows 'Project updated' toast, members tab add shows 'Member added' (roster 2->3) and remove shows 'Member removed' (3->2). DB state fully restored: member re-attached to Web Redesign, 6 tasks with original statuses, leftover TEST_* projects/comments purged.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/orgs/{org}/tasks & /sprints", "issue": "project_id is still an unvalidated str. The legacy task 'Bug fix test' has project_id='' so it renders as '—' and is invisible to non-admins (orphan). Validate the project exists in the org before insert."},
+      {"endpoint": "DELETE /api/orgs/{org}/projects/{pid}/members/{uid}", "issue": "Still returns 200 {'ok': true} when deleted_count == 0 (unchanged since iteration 6). Should be 404."},
+      {"endpoint": "N/A (missing route)", "issue": "Still no DELETE /orgs/{org}/projects/{id}; test suites create TEST_ projects that can only be removed straight from Mongo. Suites also leave TEST_ comments behind (10 purged this run)."},
+      {"endpoint": "email integration (mention/digest notifications)", "issue": "backend.err.log shows repeated `send_email failed: Client error '429 Too Many Requests'` from integrations.emergentagent.com. Non-fatal (request still succeeds) but mention emails are silently dropped — add backoff/retry or surface the failure."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Tasks page empty state (role=member, 0 accessible projects)", "issue": "Copy still reads 'No tasks. Create one to get started.' while the New task button is (correctly) hidden — mirror the Projects copy ('Ask an admin to add you').", "selector": "[data-testid='view-content-list']", "priority": "LOW"},
+      {"component": "ListView delete task / ProjectDialog remove member", "issue": "Both use native window.confirm() instead of the shadcn AlertDialog used elsewhere; inconsistent look and not testable without a dialog handler.", "selector": "[data-testid^='delete-task-']", "priority": "LOW"},
+      {"component": "TaskComments submit button", "issue": "Testid 'comment-submit-btn' vs the 'add-*-btn' convention used elsewhere (naming only).", "selector": "[data-testid='comment-submit-btn']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "TaskDialog", "issues": ["Start date / Due date still use the native browser date input (mm/dd/yyyy + OS picker) instead of the shadcn Calendar/Popover."]},
+      {"screen": "ProjectDialog Details tab", "issues": ["Still a native <input type='color'> swatch."]},
+      {"screen": "/analytics", "issues": ["Analytics.jsx just re-renders <Dashboard/>, so the 'Analytics' nav item opens a page whose eyebrow/heading reads 'OVERVIEW / Dashboard'."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter9_acl.py",
+    "/app/backend/tests/test_iter8_scoping.py",
+    "/app/backend/tests/test_scope_gaps.py",
+    "/app/backend/tests/test_acl_fix_verify.py",
+    "/app/backend/tests/test_project_members.py",
+    "/app/backend/tests/test_member_leakage.py",
+    "/app/backend/tests/test_object_acl.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "No blocking issues — both requested ACL fixes and the UI guard are verified working; nothing to fix for this iteration.",
+    "LOW: validate body.project_id exists in the org on task/sprint create (orphan task 'Bug fix test' with project_id='').",
+    "LOW: return 404 from DELETE project-member when nothing was deleted; add DELETE /orgs/{org}/projects/{id}.",
+    "LOW: update Tasks empty-state copy for members with no projects; replace window.confirm with AlertDialog; give /analytics its own heading; shadcn Calendar + color picker in dialogs.",
+    "LOW: handle the 429 from the email integration (retry/backoff or log-and-degrade explicitly)."
+  ],
+  "critical_code_review_comments": [
+    "All four body-driven write paths (create_task, create_sprint, create_time_entry, start_timer) plus update/delete task and comments now go through require_project_access/require_task_access — the class of bug is closed. Still worth converting to a FastAPI dependency so a future route cannot forget it.",
+    "start_timer reads the raw request body (await request.json()) instead of a Pydantic model — the only write route without schema validation; add a TimerStartRequest model so the 400 comes from validation, not a manual check.",
+    "Role checks remain inconsistent between sibling writes (create_sprint/create_project require manager+, create_task/create_time_entry only require project access). Now intentional, but document it via a require_role(min_role) helper.",
+    "server.py is 1166 lines; split into auth / orgs+projects / tasks+time / analytics / email-cron routers.",
+    "analytics() still shadows the local name `m` (membership doc vs per-day minutes sum, ~line 859)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter9_acl.py",
+    "/app/backend/tests/test_iter8_scoping.py"
+  ],
+  "success_rate": {"backend": "100% (126/126)", "frontend": "100% of requested flows verified; 3 LOW copy/consistency nits + 3 design nits logged"},
+  "seed_data_creation": "No permanent seed data. All TEST_i9 tasks/time-entries/comments deleted; 'Bug fix test' status restored to todo after the kanban drag test; leftover TEST_Project and TEST_AutoLead projects (and their members/tasks/sprints) plus 10 leftover TEST_ comments removed from Mongo; project name reverted from 'Web Redesign QA9' to 'Web Redesign'; member test_qa_member_1787903479@example.com IS re-attached to 'Web Redesign' (sees 1 project / 5 tasks / 5 time-entries); active_timers empty.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Verified working: widiardhana@gmail.com / Admin@1234 (owner) and test_qa_member_1787903479@example.com / Welcome@123 (member of Web Redesign).",
+  "context_for_next_testing_agent": "Run backend suites SERIALLY: `cd /app/backend && python -m pytest tests/ -n 0 -q` (xdist loadscope races because several modules toggle the member's project membership). 8 suites, 126 tests, all green as of iteration 9. New suite tests/test_iter9_acl.py is self-restoring (re-attaches the member at module teardown and cleans its own TEST_i9 rows). Helper scripts: /tmp/state8.py (detach|attach|info), /tmp/cleanup9.py (restore statuses + purge TEST_ artifacts/projects), /tmp/check9.py (dump tasks/entries/projects/comments). Fixtures always pick the org named 'Acme Corp'. IMPORTANT: if you stop mid-run, run `python /tmp/state8.py attach`. Frontend testids: login = input-email/input-password/submit-auth-btn; tasks = new-task-btn, view-{list,board,gantt,calendar,workload} + view-content-{v}, board-col-{status}/board-card-{task_id}, start-timer-/edit-task-/delete-task-{task_id} (delete uses window.confirm -> register page.on('dialog', accept)), timer-widget + timer-stop-btn, comment-input + comment-submit-btn; projects = new-project-btn/edit-project-{pid}/project-tab-details/project-tab-members/add-project-member-select/add-project-member-btn/remove-project-member-{uid}/project-edit-name/project-save-changes-btn (saving on the Details tab CLOSES the dialog, so do the members-tab work before saving). Team activity route is /team. Historical 500s in backend.out.log (GET /analytics, POST /timer/stop 'ObjectId not iterable') are from earlier iterations and no longer reproduce — timer/stop now pops _id.",
+  "rca_of_the_issue": "Root cause of the iteration-8 gap: create_time_entry and start_timer authorized only with ensure_member(org_id, user_id) and never resolved body.task_id -> project, so a member with 0 project memberships could log time / start a timer on any task in the org. Fix verified: both routes now `await require_task_access(org_id, task_id, user)` which 404s an unknown task and 403s a task whose project the caller is not a member of (owners/admins bypass). The Tasks.jsx canCreate role guard was replaced by `projects.length > 0`, which matches the backend rule (project access, not role) — confirmed in the UI for both the attached (button present, create works) and detached (button absent) states."
+}

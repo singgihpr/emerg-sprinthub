@@ -9,26 +9,31 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Rocket, Plus, CalendarBlank, ChartLine } from "@phosphor-icons/react";
+import { Rocket, Plus, CalendarBlank, ChartLine, PencilSimple } from "@phosphor-icons/react";
 import BurndownDialog from "@/components/BurndownDialog";
+import ProjectDialog from "@/components/ProjectDialog";
 
 export default function Sprints() {
   const { currentOrg } = useOrg();
+  const canManage = ["owner", "admin", "manager"].includes(currentOrg?.role);
   const [sprints, setSprints] = useState([]);
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [orgMembers, setOrgMembers] = useState([]);
   const [open, setOpen] = useState(false);
   const [burndown, setBurndown] = useState({ open: false, sprint: null });
+  const [editProject, setEditProject] = useState({ open: false, project: null });
   const [form, setForm] = useState({ project_id: "", name: "", goal: "", start_date: "", end_date: "" });
 
   const load = async () => {
     if (!currentOrg) return;
-    const [s, p, t] = await Promise.all([
+    const [s, p, t, m] = await Promise.all([
       api.get(`/orgs/${currentOrg.org_id}/sprints`),
       api.get(`/orgs/${currentOrg.org_id}/projects`),
       api.get(`/orgs/${currentOrg.org_id}/tasks`),
+      api.get(`/orgs/${currentOrg.org_id}/members`),
     ]);
-    setSprints(s.data); setProjects(p.data); setTasks(t.data);
+    setSprints(s.data); setProjects(p.data); setTasks(t.data); setOrgMembers(m.data);
   };
   useEffect(() => { load(); }, [currentOrg]);
 
@@ -52,9 +57,11 @@ export default function Sprints() {
           <div className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500">Delivery</div>
           <h1 className="font-display text-4xl font-semibold tracking-tight mt-1">Sprints</h1>
         </div>
-        <Button className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={() => setOpen(true)} data-testid="new-sprint-btn">
-          <Plus size={16} weight="bold" /> New sprint
-        </Button>
+        {canManage && (
+          <Button className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={() => setOpen(true)} data-testid="new-sprint-btn">
+            <Plus size={16} weight="bold" /> New sprint
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -70,7 +77,17 @@ export default function Sprints() {
                   </div>
                   <div>
                     <h3 className="font-display font-semibold text-lg">{s.name}</h3>
-                    <div className="text-xs text-slate-500">{project?.name}</div>
+                    {project ? (
+                      <button
+                        className="text-xs text-slate-500 hover:text-indigo-600 hover:underline flex items-center gap-1"
+                        onClick={() => setEditProject({ open: true, project })}
+                        data-testid={`sprint-project-link-${s.sprint_id}`}
+                      >
+                        <PencilSimple size={11} /> {project.name}
+                      </button>
+                    ) : (
+                      <div className="text-xs text-slate-400">Restricted project</div>
+                    )}
                   </div>
                 </div>
                 <Badge variant="secondary" className="capitalize">{s.status}</Badge>
@@ -123,6 +140,13 @@ export default function Sprints() {
         </DialogContent>
       </Dialog>
       <BurndownDialog open={burndown.open} onOpenChange={(o) => setBurndown({ open: o, sprint: o ? burndown.sprint : null })} sprint={burndown.sprint} />
+      <ProjectDialog
+        open={editProject.open}
+        onOpenChange={(o) => setEditProject({ open: o, project: o ? editProject.project : null })}
+        project={editProject.project}
+        orgMembers={orgMembers}
+        onSaved={load}
+      />
     </div>
   );
 }
