@@ -980,7 +980,8 @@ async def create_comment(org_id: str, task_id: str, body: CommentCreate, user: d
 # Analytics
 # ----------------------
 @api.get("/orgs/{org_id}/analytics")
-async def analytics(org_id: str, user: dict = Depends(get_current_user)):
+async def analytics(org_id: str, user: dict = Depends(get_current_user),
+                    start: Optional[str] = None, end: Optional[str] = None):
     m = await ensure_member(org_id, user["user_id"])
     allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
     tq = {"org_id": org_id}
@@ -992,29 +993,55 @@ async def analytics(org_id: str, user: dict = Depends(get_current_user)):
     if allowed is not None:
         eq["task_id"] = {"$in": accessible_task_ids}
     entries = await db.time_entries.find(eq, {"_id": 0}).to_list(5000)
+
+    today = now_utc().date()
+    period_mode = bool(start and end)
+    if period_mode:
+        try:
+            start_date = datetime.fromisoformat(start).date()
+            end_date = datetime.fromisoformat(end).date()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid date format, use YYYY-MM-DD")
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+        if (end_date - start_date).days > 366:
+            start_date = end_date - timedelta(days=366)
+        start_iso, end_iso = start_date.isoformat(), end_date.isoformat()
+        num_days = (end_date - start_date).days + 1
+        date_list = [(start_date + timedelta(days=i)).isoformat() for i in range(num_days)]
+        period_tasks = [t for t in tasks if start_iso <= (t.get("created_at") or "")[:10] <= end_iso]
+        scoped_entries = [e for e in entries if start_iso <= (e.get("date") or "") <= end_iso]
+        completed_tasks = sum(1 for t in tasks if start_iso <= (t.get("completed_at") or "")[:10] <= end_iso)
+        estimate_source = period_tasks
+    else:
+        date_list = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+        period_tasks = tasks
+        scoped_entries = entries
+        completed_tasks = sum(1 for t in tasks if t.get("status") == "done")
+        estimate_source = tasks
+
     by_status = {"todo": 0, "in_progress": 0, "review": 0, "done": 0}
-    for t in tasks:
+    for t in period_tasks:
         s = t.get("status", "todo")
         by_status[s] = by_status.get(s, 0) + 1
-    # tasks completed last 7 days
-    today = now_utc().date()
-    last7 = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+
     completed_series = []
-    for d in last7:
+    for d in date_list:
         c = sum(1 for t in tasks if (t.get("completed_at") or "").startswith(d))
         completed_series.append({"date": d, "completed": c})
-    # minutes logged last 7 days
     time_series = []
-    for d in last7:
-        m = sum(e["minutes"] for e in entries if e.get("date") == d)
-        time_series.append({"date": d, "minutes": m})
-    total_estimate = sum(t.get("estimate_hours", 0) * 60 for t in tasks)
-    total_logged = sum(e["minutes"] for e in entries)
+    for d in date_list:
+        mins = sum(e["minutes"] for e in scoped_entries if e.get("date") == d)
+        time_series.append({"date": d, "minutes": mins})
+
+    total_estimate = sum(t.get("estimate_hours", 0) * 60 for t in estimate_source)
+    total_logged = sum(e["minutes"] for e in scoped_entries)
+    total_tasks = len(period_tasks)
     return {
         "by_status": by_status,
-        "total_tasks": len(tasks),
-        "completed_tasks": by_status.get("done", 0),
-        "completion_rate": (by_status.get("done", 0) / len(tasks) * 100) if tasks else 0,
+        "total_tasks": total_tasks,
+        "completed_tasks": completed_tasks,
+        "completion_rate": (completed_tasks / total_tasks * 100) if total_tasks else 0,
         "total_logged_minutes": total_logged,
         "total_estimate_minutes": total_estimate,
         "completed_series": completed_series,

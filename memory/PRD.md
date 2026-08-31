@@ -24,6 +24,10 @@ Build a simply usable work management app that can handle sprint backlog and rou
 8. **Project delete with cascade** (sprints, tasks, comments, time-entries, active-timers, project-members)
 9. **Project status** (planning/active/on_hold/archived) — Literal-validated on POST and PATCH, displayed as colored badge on project cards
 10. **Sprint filters** — by project and by status (client-side filter over the accessible sprint set)
+11. **Sprint manual status change** (Jun 2026) — PATCH /orgs/{id}/sprints/{sprint_id} with SprintUpdate (planned/active/completed), manager+ only; dropdown on each sprint card
+12. **Project status filter** on Projects page (client-side: all/planning/active/on_hold/archived)
+13. **Task filters** — added Project + Status filters on Tasks page (client-side, applies across all 5 views, combines with assignee + search)
+14. **Analytics period filter** (Jun 2026) — Analytics page only: 7d / 30d / this month / custom range. Backend analytics accepts start/end; ALL metrics scoped to period; completed counted by completed_at within period; tasks/estimates scoped by created_at within period. Dashboard (Overview) unchanged (no params = legacy all-time KPIs + last-7-day trend).
 
 ## Backlog / Next Priorities
 - [ ] DELETE /orgs/{id}/members/{user_id} endpoint (currently cannot remove an org member)
