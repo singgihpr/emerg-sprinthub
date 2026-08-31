@@ -172,6 +172,9 @@ class SprintCreate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
 
+class SprintUpdate(BaseModel):
+    status: Literal["planned", "active", "completed"]
+
 class TaskCreate(BaseModel):
     project_id: str
     title: str
@@ -637,6 +640,18 @@ async def create_sprint(org_id: str, body: SprintCreate, user: dict = Depends(ge
     await db.sprints.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+@api.patch("/orgs/{org_id}/sprints/{sprint_id}")
+async def update_sprint(org_id: str, sprint_id: str, body: SprintUpdate, user: dict = Depends(get_current_user)):
+    sprint = await db.sprints.find_one({"sprint_id": sprint_id, "org_id": org_id})
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+    m = await require_project_access(org_id, sprint["project_id"], user)
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
+    await db.sprints.update_one({"sprint_id": sprint_id, "org_id": org_id}, {"$set": {"status": body.status}})
+    updated = await db.sprints.find_one({"sprint_id": sprint_id, "org_id": org_id}, {"_id": 0})
+    return updated
 
 # ----------------------
 # Tasks

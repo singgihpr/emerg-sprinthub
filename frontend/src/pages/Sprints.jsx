@@ -52,6 +52,11 @@ export default function Sprints() {
     setOpen(false); load();
   };
 
+  const changeStatus = async (sid, status) => {
+    await api.patch(`/orgs/${currentOrg.org_id}/sprints/${sid}`, { status });
+    load();
+  };
+
   const sprintStats = (sid) => {
     const list = tasks.filter((t) => t.sprint_id === sid);
     const done = list.filter((t) => t.status === "done").length;
@@ -133,6 +138,20 @@ export default function Sprints() {
                 </div>
                 <Badge variant="secondary" className="capitalize">{s.status}</Badge>
               </div>
+              {canManage && (
+                <div className="mt-3">
+                  <Select value={s.status} onValueChange={(v) => changeStatus(s.sprint_id, v)}>
+                    <SelectTrigger className="w-40 h-8 text-xs bg-white" data-testid={`sprint-status-select-${s.sprint_id}`}>
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SPRINT_STATUSES.map((opt) => (
+                        <SelectItem key={opt.v} value={opt.v} data-testid={`sprint-status-option-${opt.v}`}>{opt.l}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               {s.goal && <p className="text-sm text-slate-600 mt-4">{s.goal}</p>}
               <div className="flex items-center gap-3 mt-4 text-xs text-slate-500">
                 <CalendarBlank size={14} />
