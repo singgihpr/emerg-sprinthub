@@ -25,7 +25,7 @@ def _admin_creds():
 
 def _member_creds():
     content = CRED_FILE.read_text(encoding="utf-8")
-    m = re.search(r'(?is)Test Regular Member(.*?)##', content)
+    m = re.search(r'(?is)Regular Member(.*?)##', content)
     block = m.group(1) if m else content
     e = re.search(r'(?im)^\s*[-*]\s*Email\s*:\s*`?([^`\s]+)', block)
     pw = re.search(r'(?im)^\s*[-*]\s*Password\s*:\s*`?([^`\s]+)', block)

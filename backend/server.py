@@ -128,6 +128,18 @@ class OrgCreate(BaseModel):
     name: str
     logo: Optional[str] = None
 
+class OrgUpdate(BaseModel):
+    name: Optional[str] = None
+    logo: Optional[str] = None
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    picture: Optional[str] = None
+
+class PasswordChange(BaseModel):
+    current_password: Optional[str] = None
+    new_password: str = Field(..., min_length=6, max_length=128)
+
 class MemberInvite(BaseModel):
     email: EmailStr
     name: str
@@ -245,6 +257,26 @@ async def logout(response: Response):
 async def me(user: dict = Depends(get_current_user)):
     return user
 
+@api.patch("/auth/me")
+async def update_profile(body: ProfileUpdate, user: dict = Depends(get_current_user)):
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": updates})
+    return await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+
+@api.post("/auth/change-password")
+async def change_password(body: PasswordChange, user: dict = Depends(get_current_user)):
+    u = await db.users.find_one({"user_id": user["user_id"]})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    # If user already has a password, verify current
+    if u.get("password_hash"):
+        if not body.current_password or not verify_password(body.current_password, u["password_hash"]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"password_hash": hash_password(body.new_password)}})
+    return {"ok": True}
+
 @api.post("/auth/google/session")
 async def google_session(request: Request, response: Response):
     body = await request.json()
@@ -325,6 +357,24 @@ async def create_org(body: OrgCreate, user: dict = Depends(get_current_user)):
     doc["role"] = "owner"
     doc.pop("_id", None)
     return doc
+
+@api.patch("/orgs/{org_id}")
+async def update_org(org_id: str, body: OrgUpdate, user: dict = Depends(get_current_user)):
+    m = await db.memberships.find_one({"org_id": org_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not m:
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    if m["role"] not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner or admin can edit workspace")
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    result = await db.organizations.update_one({"org_id": org_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    org = await db.organizations.find_one({"org_id": org_id}, {"_id": 0})
+    org["role"] = m["role"]
+    return org
+
 
 async def ensure_member(org_id: str, user_id: str) -> dict:
     m = await db.memberships.find_one({"org_id": org_id, "user_id": user_id}, {"_id": 0})

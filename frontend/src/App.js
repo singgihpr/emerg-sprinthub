@@ -13,6 +13,7 @@ import Projects from "@/pages/Projects";
 import Sprints from "@/pages/Sprints";
 import Members from "@/pages/Members";
 import TeamActivity from "@/pages/TeamActivity";
+import Profile from "@/pages/Profile";
 import Analytics from "@/pages/Analytics";
 
 function ProtectedRoute({ children }) {
@@ -46,6 +47,7 @@ function AppRoutes() {
         <Route path="members" element={<Members />} />
         <Route path="team" element={<TeamActivity />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="profile" element={<Profile />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

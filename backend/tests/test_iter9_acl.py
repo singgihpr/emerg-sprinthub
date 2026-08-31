@@ -37,7 +37,7 @@ def admin():
 
 @pytest.fixture(scope="module")
 def member():
-    block = re.search(r'(?is)Test Regular Member(.*?)##', CRED).group(1)
+    block = re.search(r'(?is)Regular Member(.*?)##', CRED).group(1)
     e = re.search(r'(?im)^\s*[-*]\s*Email\s*:\s*`?([^`\s]+)', block).group(1)
     p = re.search(r'(?im)^\s*[-*]\s*Password\s*:\s*`?([^`\s]+)', block).group(1)
     return _login(e, p)

@@ -11,10 +11,11 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   House, ListChecks, FolderOpen, Users, ChartBar, CaretUpDown, Plus,
-  SignOut, Buildings, Rocket, Pulse,
+  SignOut, Buildings, Rocket, Pulse, Gear, UserCircle,
 } from "@phosphor-icons/react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import TaskTimer from "@/components/TaskTimer";
+import OrgSettingsDialog from "@/components/OrgSettingsDialog";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: House },
@@ -32,6 +33,7 @@ export default function AppShell() {
   const nav = useNavigate();
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [newOrgOpen, setNewOrgOpen] = useState(false);
+  const [orgSettingsOpen, setOrgSettingsOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
 
   const handleLogout = async () => { await logout(); nav("/login"); };
@@ -48,8 +50,12 @@ export default function AppShell() {
                 data-testid="org-switcher-btn"
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-50 transition-colors group"
               >
-                <div className="w-8 h-8 rounded-md bg-indigo-600 text-white flex items-center justify-center text-sm font-semibold shrink-0">
-                  {(currentOrg?.name || "?").slice(0, 1).toUpperCase()}
+                <div className="w-8 h-8 rounded-md bg-indigo-600 text-white flex items-center justify-center text-sm font-semibold shrink-0 overflow-hidden">
+                  {currentOrg?.logo ? (
+                    <img src={currentOrg.logo} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    (currentOrg?.name || "?").slice(0, 1).toUpperCase()
+                  )}
                 </div>
                 <div className="flex-1 text-left min-w-0">
                   <div className="text-sm font-semibold text-slate-900 truncate">{currentOrg?.name || "Select workspace"}</div>
@@ -68,6 +74,9 @@ export default function AppShell() {
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => { setOrgMenuOpen(false); setOrgSettingsOpen(true); }} data-testid="org-settings-menu">
+                <Gear size={16} className="mr-2" /> Workspace settings
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => { setOrgMenuOpen(false); setNewOrgOpen(true); }} data-testid="create-org-menu">
                 <Plus size={16} className="mr-2" /> Create workspace
               </DropdownMenuItem>
@@ -109,6 +118,9 @@ export default function AppShell() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>Account</DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => nav("/profile")} data-testid="profile-menu">
+                <UserCircle size={16} className="mr-2" /> Profile
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleLogout} data-testid="logout-btn">
                 <SignOut size={16} className="mr-2" /> Sign out
               </DropdownMenuItem>
@@ -140,6 +152,8 @@ export default function AppShell() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <OrgSettingsDialog open={orgSettingsOpen} onOpenChange={setOrgSettingsOpen} />
     </div>
   );
 }

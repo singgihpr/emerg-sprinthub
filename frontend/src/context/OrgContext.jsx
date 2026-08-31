@@ -35,8 +35,10 @@ export function OrgProvider({ children }) {
     return data;
   };
 
+  const reload = loadOrgs;
+
   return (
-    <OrgContext.Provider value={{ orgs, currentOrg, switchOrg, createOrg, reload: loadOrgs }}>
+    <OrgContext.Provider value={{ orgs, currentOrg, switchOrg, createOrg, reload }}>
       {children}
     </OrgContext.Provider>
   );
