@@ -28,6 +28,7 @@ Build a simply usable work management app that can handle sprint backlog and rou
 12. **Project status filter** on Projects page (client-side: all/planning/active/on_hold/archived)
 13. **Task filters** — added Project + Status filters on Tasks page (client-side, applies across all 5 views, combines with assignee + search)
 14. **Analytics period filter** (Jun 2026) — Analytics page only: 7d / 30d / this month / custom range. Backend analytics accepts start/end; ALL metrics scoped to period; completed counted by completed_at within period; tasks/estimates scoped by created_at within period. Dashboard (Overview) unchanged (no params = legacy all-time KPIs + last-7-day trend).
+15. **Group by Project toggle** (Jun 2026) — Tasks page List view: switch to render each project as a collapsible section (color icon, name, key, task count); "No project" section for orphan tasks; combines with existing filters. Toggle only visible in List view.
 
 ## Backlog / Next Priorities
 - [ ] DELETE /orgs/{id}/members/{user_id} endpoint (currently cannot remove an org member)

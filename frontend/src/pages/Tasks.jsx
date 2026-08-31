@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users, User, FolderOpen, CircleDashed } from "@phosphor-icons/react";
 import TaskDialog from "@/components/TaskDialog";
 import ListView from "@/components/views/ListView";
@@ -41,6 +43,7 @@ export default function Tasks() {
   const [assignee, setAssignee] = useState(() => localStorage.getItem("task_assignee_filter") || "all");
   const [projectFilter, setProjectFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [groupByProject, setGroupByProject] = useState(false);
   const [dialog, setDialog] = useState({ open: false, task: null });
 
   const load = useCallback(async () => {
@@ -74,6 +77,7 @@ export default function Tasks() {
   });
 
   const props = { tasks: filtered, projects, members, sprints, onEdit: (task) => setDialog({ open: true, task }), reload: load };
+  const listProps = { ...props, groupByProject };
 
   return (
     <div className="p-8 space-y-6">
@@ -102,6 +106,12 @@ export default function Tasks() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
+          {view === "list" && (
+            <div className="flex items-center gap-2 mr-1 px-3 h-10 rounded-md border border-slate-200 bg-white" data-testid="group-by-project-wrap">
+              <Switch id="group-by-project" checked={groupByProject} onCheckedChange={setGroupByProject} data-testid="group-by-project-toggle" />
+              <Label htmlFor="group-by-project" className="text-sm text-slate-600 cursor-pointer whitespace-nowrap">Group by project</Label>
+            </div>
+          )}
           <Select value={projectFilter} onValueChange={setProjectFilter}>
             <SelectTrigger className="h-10 w-48 bg-white" data-testid="project-filter">
               <FolderOpen size={14} className="mr-1 text-slate-400" />
@@ -150,7 +160,7 @@ export default function Tasks() {
       </div>
 
       <div data-testid={`view-content-${view}`}>
-        {view === "list" && <ListView {...props} />}
+        {view === "list" && <ListView {...listProps} />}
         {view === "board" && <BoardView {...props} />}
         {view === "gantt" && <GanttView {...props} />}
         {view === "calendar" && <CalendarView {...props} />}
