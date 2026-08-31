@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users, User } from "@phosphor-icons/react";
+import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users, User, FolderOpen, CircleDashed } from "@phosphor-icons/react";
 import TaskDialog from "@/components/TaskDialog";
 import ListView from "@/components/views/ListView";
 import BoardView from "@/components/views/BoardView";
@@ -22,6 +22,13 @@ const VIEWS = [
   { key: "workload", label: "Workload", icon: Users },
 ];
 
+const TASK_STATUSES = [
+  { v: "todo", l: "To Do" },
+  { v: "in_progress", l: "In Progress" },
+  { v: "review", l: "Review" },
+  { v: "done", l: "Done" },
+];
+
 export default function Tasks() {
   const { currentOrg } = useOrg();
   const { user } = useAuth();
@@ -32,6 +39,8 @@ export default function Tasks() {
   const [sprints, setSprints] = useState([]);
   const [query, setQuery] = useState("");
   const [assignee, setAssignee] = useState(() => localStorage.getItem("task_assignee_filter") || "all");
+  const [projectFilter, setProjectFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [dialog, setDialog] = useState({ open: false, task: null });
 
   const load = useCallback(async () => {
@@ -56,6 +65,8 @@ export default function Tasks() {
 
   const filtered = tasks.filter((t) => {
     if (query && !t.title.toLowerCase().includes(query.toLowerCase())) return false;
+    if (projectFilter !== "all" && t.project_id !== projectFilter) return false;
+    if (statusFilter !== "all" && t.status !== statusFilter) return false;
     if (assignee === "all") return true;
     if (assignee === "me") return t.assignee_id === user?.user_id;
     if (assignee === "unassigned") return !t.assignee_id;
@@ -91,6 +102,30 @@ export default function Tasks() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
+          <Select value={projectFilter} onValueChange={setProjectFilter}>
+            <SelectTrigger className="h-10 w-48 bg-white" data-testid="project-filter">
+              <FolderOpen size={14} className="mr-1 text-slate-400" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="project-filter-all">All projects</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.project_id} value={p.project_id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-10 w-44 bg-white" data-testid="status-filter">
+              <CircleDashed size={14} className="mr-1 text-slate-400" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="status-filter-all">All statuses</SelectItem>
+              {TASK_STATUSES.map((s) => (
+                <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={assignee} onValueChange={setAssignee}>
             <SelectTrigger className="h-10 w-52 bg-white" data-testid="assignee-filter">
               <User size={14} className="mr-1 text-slate-400" />
