@@ -1,0 +1,64 @@
+{
+  "summary": "Iteration 11 testing of project delete-cascade, project status field, and sprint filters. Backend: new suite /app/backend/tests/test_iter11_project_delete_status.py (23 tests) — 22 pass, 1 real bug found (POST /projects does not validate status enum). Cascade delete verified end-to-end (project + sprint + task + comment + time entry + ACTIVE timer all removed, {ok:true,deleted_tasks:1}); RBAC verified for owner(200)/manager(403)/member(403)/anon(401); 404 for unknown pid; sprint filters verified for project_id, status, both, neither, unknown pid, and member-ACL ([] for inaccessible project). Full regression suite re-run serially: 173 passed / 3 failed (1 new bug + 2 pre-existing drift). Frontend: Playwright flows for admin/manager/member — status badge on project cards, edit-dialog Status select, red Delete project button with confirm + cascade toast, sprint project/status filters + Clear + empty state, plus regression of login, 5 task views, assignee filter, search, timer start/stop, comments, kanban drag, burndown, /team, /members, /analytics, workspace settings, profile. One spec miss found: the Create-project dialog has NO Status select.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/orgs/{org_id}/projects", "issue": "status is NOT validated on create — {\"status\":\"garbage\"} returns 200 and persists. PATCH correctly returns 400 for the same value, so validation is asymmetric. Downstream UI damage confirmed: the project card badge renders empty with class=\"... rounded undefined\" (STATUS_STYLES/STATUS_LABELS lookup miss) and the edit dialog Status select renders blank. Fix: reuse the same enum check in create_project, or better use Literal['planning','active','on_hold','archived'] in ProjectCreate/ProjectUpdate."},
+      {"endpoint": "PATCH /api/orgs/{org_id}/projects/{pid}", "issue": "Only checks org role >= manager; it does NOT call require_project_access. A manager who is not a project member can rename/change status/color of ANY project in the org, even though the same manager gets [] from GET /projects and 403 on task routes for that project. Inconsistent with the project-ACL model used everywhere else."},
+      {"endpoint": "GET /api/orgs/{org_id}/sprints", "issue": "Works as specified, but the new project_id/status query params are unused by the frontend (Sprints.jsx filters client-side), so this is currently dead API surface. Not a defect — just noting the duplication."},
+      {"endpoint": "PATCH /api/orgs/{org_id} (pre-existing)", "issue": "Unknown org id returns 403 instead of 404 (test_iter10 failure, unchanged)."},
+      {"endpoint": "GET /api/orgs/{org_id}/projects/{pid}/members (pre-existing)", "issue": "Seeded admin's project_role on 'Web Redesign' is 'member' not 'lead' (test_project_members failure, data drift, unchanged)."},
+      {"endpoint": "DELETE /api/orgs/{org_id}/members/{user_id}", "issue": "Endpoint does not exist — once a user is invited to a workspace there is no way to remove them (only project-level removal exists). Left 4 throwaway test users in Acme Corp during this run; had to delete them straight from MongoDB."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Projects.jsx — Create project dialog", "issue": "SPEC MISS: there is no Status Select in the create dialog. data-testid=\"project-create-status\" does not exist and the create payload ({name,key,description,color}) never sends status, so every new project silently defaults to 'active'. Requirement 'Create project dialog has a Status Select (default Active)' is NOT implemented.", "selector": "[data-testid=\"project-create-status\"]", "priority": "HIGH"},
+      {"component": "ProjectDialog.jsx (opened from Sprints page)", "issue": "Org members (role=member) can open the full Edit project dialog via the sprint card project link (sprint-project-link-*): the Name/Description/Status/Color inputs and 'Save changes' are all enabled, and clicking Save fails with a 403 toast 'Requires manager or higher role'. Delete button is correctly hidden. Gate the link / make the form read-only when !canManage.", "selector": "[data-testid^=\"sprint-project-link-\"]", "priority": "MEDIUM"},
+      {"component": "Projects.jsx status badge", "issue": "No fallback for an unknown status value — className becomes the literal string 'undefined' and the badge label is empty (reproduced with status='garbage'). Use a default entry, e.g. STATUS_STYLES[p.status] || STATUS_STYLES.active.", "selector": "[data-testid^=\"project-card-\"] span", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sprints page filters", "issues": ["Filter row looks good (icon + two selects + Clear); Clear only appears when a filter is set, as specified", "sprint-filter-project lists every project including ones with zero sprints and 6 identically-named 'TEST_AutoLead' leftovers — dropdown is unreadable because of test-data pollution (data problem, not code)"]},
+      {"screen": "Projects page", "issues": ["Status badges (Active/On Hold/Planning/Archived) have good contrast and alignment; no issues"]},
+      {"screen": "Edit task dialog (pre-existing)", "issues": ["Start/Due date still use native browser date inputs (mm/dd/yyyy) instead of the shadcn calendar"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_project_delete_status.py",
+    "/app/test_reports/pytest/iter11_results.xml",
+    "/app/test_reports/pytest/iter11_all.xml",
+    "/app/backend/tests/cleanup_iter11.py",
+    "/app/backend/tests/cleanup_iter11_users.py",
+    "/app/backend/tests/seed_iter11_ui.py"
+  ],
+  "action_items": [
+    "Validate project status on CREATE (POST /projects) the same way PATCH does — currently any string is accepted and breaks the badge + edit dialog rendering.",
+    "Add the missing Status Select (data-testid=\"project-create-status\", default Active) to the create-project dialog in Projects.jsx and include status in the POST body.",
+    "Add a status fallback in Projects.jsx (STATUS_STYLES[p.status] || STATUS_STYLES.active) so unknown/legacy values don't render an empty badge with class 'undefined'.",
+    "Decide on manager scope for PATCH /projects: it currently bypasses require_project_access (manager can edit projects they cannot even see).",
+    "Make ProjectDialog read-only (or hide the sprint-card project link) for org members — they can currently open the edit form and only find out via a 403 toast.",
+    "Optional: have Sprints.jsx actually use the new ?project_id=&status= params instead of filtering client-side, otherwise the params are dead code.",
+    "Data hygiene: 7+ leftover TEST_* projects and an orphan task 'Bug fix test' (no project) clutter the workspace; one of them even caused a false burndown test failure (backend_test.py picks sprints[0])."
+  ],
+  "critical_code_review_comments": [
+    "ProjectCreate/ProjectUpdate should use typing.Literal for status so FastAPI/Pydantic enforces the enum in one place instead of a hand-rolled tuple check that only exists in update_project.",
+    "delete_project cascade is correct and ordered safely (collect task_ids before deleting tasks), but it is not transactional — a mid-way failure would leave orphans. Acceptable for now; consider a soft-delete flag or a session/transaction if data integrity matters.",
+    "backend_test.py::TestBurndown asserts on sprints[0] from a created_at-desc list — inherently flaky in a shared preview DB. Should pick the sprint named 'Sprint 1' of 'Web Redesign' explicitly.",
+    "server.py is now ~1300 lines; splitting routers (auth, orgs, projects, tasks, analytics) is overdue.",
+    "invite_member does not validate the role string either (same class of bug as project status) — any role value can be persisted into memberships."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_project_delete_status.py (new, 23 tests)",
+    "/app/backend/tests/cleanup_iter11.py (new helper — deletes leftover TEST_QA projects via API cascade)",
+    "/app/backend/tests/cleanup_iter11_users.py (new helper — removes throwaway test_qa_mgr_* users; needed because no API exists to remove an org member)",
+    "/app/backend/tests/seed_iter11_ui.py (new helper — seeds/tears down a throwaway project+sprint for frontend filter testing)"
+  ],
+  "success_rate": {"backend": "96% (22/23 new; 173/176 full suite serially)", "frontend": "92% — all delete/status/filter flows pass except the missing create-dialog Status select"},
+  "seed_data_creation": "All test data was throwaway and has been cleaned up: TEST_QA projects (casc, SprintFlt, UIDel, BadStatus, rbac*) deleted via the cascade endpoint; throwaway test_qa_mgr_* manager users removed from MongoDB. Left behind: one comment 'TEST_QA iter11 regression comment' on task tsk_78b8000b91f8, and the pre-existing orphan task 'Bug fix test' was dragged To Do -> In Progress by the kanban regression test. Seeded 'Web Redesign' + 'Sprint 1' + 5 tasks verified intact (explicit test test_seed_project_still_intact).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "widiardhana@gmail.com / Admin@1234 (owner) and test_qa_member_1787903479@example.com / Welcome@123 (member) — both verified working at end of run. Invited users get the default password Welcome@123 (useful for creating manager-role accounts).",
+  "context_for_next_testing_agent": "IMPORTANT: run the backend suite with `-n 0`. With pytest.ini's default `-n 2 --dist loadscope` the iteration-11 file racing against test_acl_fix_verify.py / test_iter8_scoping.py produces ~15 FALSE failures (those ACL suites create/detach a shared member and assume no concurrent project creation). Serial baseline = 173 passed / 3 failed: (1) test_iter11 create_rejects_invalid_status = REAL bug, (2) test_iter10 test_missing_org_404 = pre-existing 403-vs-404, (3) test_project_members admin-as-lead = pre-existing data drift. Also: backend_test.py::TestBurndown uses sprints[0] of a created_at-desc list, so ANY throwaway sprint left in the DB makes it fail — always run /app/backend/tests/cleanup_iter11.py after the suite. The iteration-11 manager RBAC test invites a new test_qa_mgr_* user each run and there is no API to remove org members; run cleanup_iter11_users.py to purge them. Frontend testids confirmed: login = input-email/input-password/submit-auth-btn; logout = user-menu-btn -> logout-btn; org settings = org-switcher-btn -> org-settings-menu; tasks = view-{list|board|gantt|calendar|workload}, task-row-{id}, start-timer-{id}, edit-task-{id}, timer-widget, timer-stop-btn, assignee-filter/filter-me/filter-all, task-search, comment-input, comment-submit-btn, board-col-{status}, board-card-{id}. NOTE: project-create-status does NOT exist yet.",
+  "rca_of_the_issue": "create_project builds the document with `\"status\": body.status or \"active\"` and never runs the enum check that update_project performs, because the check was added only to the PATCH handler and ProjectCreate.status is a plain Optional[str]. Any client (or a stale/legacy document) can therefore store an arbitrary status; Projects.jsx then does STATUS_STYLES[p.status || 'active'] with no fallback, producing className '...rounded undefined' and an empty badge, and ProjectDialog's Select receives a value that is not in STATUS_OPTS so its trigger renders blank. Single-point fix: declare status as Literal['planning','active','on_hold','archived'] on both ProjectCreate and ProjectUpdate and add an `|| STATUS_STYLES.active` fallback in the UI."
+}

@@ -10,12 +10,15 @@ import bcrypt
 import jwt
 import httpx
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from typing import List, Optional, Literal
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
+from PIL import Image
+from io import BytesIO
+import base64
 
 # ----------------------
 # Setup
@@ -150,11 +153,13 @@ class ProjectCreate(BaseModel):
     key: str
     description: Optional[str] = ""
     color: Optional[str] = "#4F46E5"
+    status: Optional[Literal["planning", "active", "on_hold", "archived"]] = "active"
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     color: Optional[str] = None
+    status: Optional[Literal["planning", "active", "on_hold", "archived"]] = None
 
 class ProjectMemberAdd(BaseModel):
     user_id: str
@@ -375,6 +380,50 @@ async def update_org(org_id: str, body: OrgUpdate, user: dict = Depends(get_curr
     org["role"] = m["role"]
     return org
 
+MAX_LOGO_UPLOAD = 5 * 1024 * 1024  # 5 MB raw
+LOGO_SIZE = 256  # target square px
+
+def _resize_to_data_url(raw: bytes, size: int = LOGO_SIZE) -> str:
+    """Open bytes as image, center-crop to square, resize to size×size, return webp data URL."""
+    with Image.open(BytesIO(raw)) as im:
+        im = im.convert("RGBA")
+        w, h = im.size
+        m = min(w, h)
+        left = (w - m) // 2
+        top = (h - m) // 2
+        im = im.crop((left, top, left + m, top + m))
+        im = im.resize((size, size), Image.LANCZOS)
+        out = BytesIO()
+        im.save(out, format="WEBP", quality=85, method=6)
+        b64 = base64.b64encode(out.getvalue()).decode()
+    return f"data:image/webp;base64,{b64}"
+
+@api.post("/orgs/{org_id}/logo")
+async def upload_org_logo(org_id: str, file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    m = await db.memberships.find_one({"org_id": org_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not m:
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    if m["role"] not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner or admin can upload workspace logo")
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(raw) > MAX_LOGO_UPLOAD:
+        raise HTTPException(status_code=400, detail="Image too large (max 5 MB)")
+    try:
+        data_url = _resize_to_data_url(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+    result = await db.organizations.update_one({"org_id": org_id}, {"$set": {"logo": data_url}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    org = await db.organizations.find_one({"org_id": org_id}, {"_id": 0})
+    org["role"] = m["role"]
+    return org
+
+
 
 async def ensure_member(org_id: str, user_id: str) -> dict:
     m = await db.memberships.find_one({"org_id": org_id, "user_id": user_id}, {"_id": 0})
@@ -468,6 +517,7 @@ async def create_project(org_id: str, body: ProjectCreate, user: dict = Depends(
         "project_id": new_id("prj"), "org_id": org_id,
         "name": body.name, "key": body.key.upper(),
         "description": body.description, "color": body.color,
+        "status": body.status or "active",
         "created_by": user["user_id"], "created_at": now_utc().isoformat()
     }
     await db.projects.insert_one(dict(doc))
@@ -481,7 +531,7 @@ async def create_project(org_id: str, body: ProjectCreate, user: dict = Depends(
 
 @api.patch("/orgs/{org_id}/projects/{project_id}")
 async def update_project(org_id: str, project_id: str, body: ProjectUpdate, user: dict = Depends(get_current_user)):
-    m = await ensure_member(org_id, user["user_id"])
+    m = await require_project_access(org_id, project_id, user)
     if m["role"] not in ("owner", "admin", "manager"):
         raise HTTPException(status_code=403, detail="Requires manager or higher role")
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -491,6 +541,26 @@ async def update_project(org_id: str, project_id: str, body: ProjectUpdate, user
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Project not found")
     return await db.projects.find_one({"project_id": project_id}, {"_id": 0})
+
+@api.delete("/orgs/{org_id}/projects/{project_id}")
+async def delete_project(org_id: str, project_id: str, user: dict = Depends(get_current_user)):
+    m = await ensure_member(org_id, user["user_id"])
+    if m["role"] not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner or admin can delete projects")
+    project = await db.projects.find_one({"project_id": project_id, "org_id": org_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # Cascade: collect task ids, then delete children
+    task_ids = [t["task_id"] async for t in db.tasks.find({"org_id": org_id, "project_id": project_id}, {"_id": 0, "task_id": 1})]
+    await db.tasks.delete_many({"org_id": org_id, "project_id": project_id})
+    await db.sprints.delete_many({"org_id": org_id, "project_id": project_id})
+    await db.project_members.delete_many({"org_id": org_id, "project_id": project_id})
+    if task_ids:
+        await db.time_entries.delete_many({"org_id": org_id, "task_id": {"$in": task_ids}})
+        await db.comments.delete_many({"org_id": org_id, "task_id": {"$in": task_ids}})
+        await db.active_timers.delete_many({"org_id": org_id, "task_id": {"$in": task_ids}})
+    await db.projects.delete_one({"project_id": project_id, "org_id": org_id})
+    return {"ok": True, "deleted_tasks": len(task_ids)}
 
 @api.get("/orgs/{org_id}/projects/{project_id}/members")
 async def list_project_members(org_id: str, project_id: str, user: dict = Depends(get_current_user)):
@@ -537,12 +607,20 @@ async def remove_project_member(org_id: str, project_id: str, user_id: str, user
 # Sprints
 # ----------------------
 @api.get("/orgs/{org_id}/sprints")
-async def list_sprints(org_id: str, user: dict = Depends(get_current_user)):
+async def list_sprints(org_id: str, user: dict = Depends(get_current_user),
+                       project_id: Optional[str] = None, status: Optional[str] = None):
     m = await ensure_member(org_id, user["user_id"])
     allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
     q = {"org_id": org_id}
     if allowed is not None:
         q["project_id"] = {"$in": allowed}
+    if project_id:
+        # further narrow, still respecting ACL
+        if allowed is not None and project_id not in allowed:
+            return []
+        q["project_id"] = project_id
+    if status:
+        q["status"] = status
     return await db.sprints.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 @api.post("/orgs/{org_id}/sprints")
@@ -1148,7 +1226,7 @@ async def startup():
             "project_id": prj_id, "org_id": org_id,
             "name": "Web Redesign", "key": "WEB",
             "description": "Company website redesign project",
-            "color": "#4F46E5", "created_by": user_id,
+            "color": "#4F46E5", "status": "active", "created_by": user_id,
             "created_at": now_utc().isoformat()
         })
         await db.project_members.insert_one({
@@ -1188,9 +1266,11 @@ async def startup():
         # update password to match .env
         if not verify_password(admin_password, existing["password_hash"]):
             await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
-    # Backfill: ensure every project has its creator as a project_member (idempotent)
+    # Backfill: ensure every project has its creator as a project_member (idempotent), and default status
     all_projects = await db.projects.find({}, {"_id": 0}).to_list(5000)
     for p in all_projects:
+        if not p.get("status"):
+            await db.projects.update_one({"project_id": p["project_id"]}, {"$set": {"status": "active"}})
         exists = await db.project_members.find_one({"org_id": p["org_id"], "project_id": p["project_id"], "user_id": p.get("created_by")})
         if not exists and p.get("created_by"):
             await db.project_members.insert_one({

@@ -6,9 +6,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FolderOpen, Plus, PencilSimple } from "@phosphor-icons/react";
 import ProjectDialog from "@/components/ProjectDialog";
+
+const STATUS_STYLES = {
+  planning: "bg-slate-100 text-slate-700",
+  active: "bg-emerald-100 text-emerald-700",
+  on_hold: "bg-amber-100 text-amber-700",
+  archived: "bg-slate-100 text-slate-500",
+};
+const STATUS_LABELS = {
+  planning: "Planning", active: "Active", on_hold: "On Hold", archived: "Archived",
+};
+const statusStyle = (s) => STATUS_STYLES[s] || STATUS_STYLES.active;
+const statusLabel = (s) => STATUS_LABELS[s] || STATUS_LABELS.active;
 
 export default function Projects() {
   const { currentOrg } = useOrg();
@@ -17,7 +30,7 @@ export default function Projects() {
   const [orgMembers, setOrgMembers] = useState([]);
   const [open, setOpen] = useState(false);
   const [editDialog, setEditDialog] = useState({ open: false, project: null });
-  const [form, setForm] = useState({ name: "", key: "", description: "", color: "#4F46E5" });
+  const [form, setForm] = useState({ name: "", key: "", description: "", color: "#4F46E5", status: "active" });
 
   const load = async () => {
     if (!currentOrg) return;
@@ -32,7 +45,7 @@ export default function Projects() {
   const save = async () => {
     if (!form.name || !form.key) return;
     await api.post(`/orgs/${currentOrg.org_id}/projects`, form);
-    setForm({ name: "", key: "", description: "", color: "#4F46E5" });
+    setForm({ name: "", key: "", description: "", color: "#4F46E5", status: "active" });
     setOpen(false); load();
   };
 
@@ -58,7 +71,12 @@ export default function Projects() {
               <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: `${p.color}20`, color: p.color }}>
                 <FolderOpen size={20} weight="duotone" />
               </div>
-              <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{p.key}</span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded ${statusStyle(p.status)}`}>
+                  {statusLabel(p.status)}
+                </span>
+                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{p.key}</span>
+              </div>
             </div>
             <h3 className="font-display font-semibold text-lg mt-4">{p.name}</h3>
             <p className="text-sm text-slate-500 mt-1 line-clamp-2 flex-1">{p.description || "No description"}</p>
@@ -87,7 +105,21 @@ export default function Projects() {
             <div><Label>Name</Label><Input className="mt-1.5" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="project-name-input" /></div>
             <div><Label>Key (short code, e.g., WEB)</Label><Input className="mt-1.5" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })} maxLength={5} data-testid="project-key-input" /></div>
             <div><Label>Description</Label><Textarea className="mt-1.5" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-            <div><Label>Color</Label><Input type="color" className="mt-1.5 h-10 w-24" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Status</Label>
+                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                  <SelectTrigger className="mt-1.5" data-testid="project-create-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="planning">Planning</SelectItem>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="on_hold">On hold</SelectItem>
+                    <SelectItem value="archived">Archived</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div><Label>Color</Label><Input type="color" className="mt-1.5 h-10 w-24" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></div>
+            </div>
             <Button className="w-full bg-indigo-600 hover:bg-indigo-700" onClick={save} data-testid="project-save-btn">Create</Button>
           </div>
         </DialogContent>

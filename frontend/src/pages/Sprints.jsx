@@ -9,9 +9,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Rocket, Plus, CalendarBlank, ChartLine, PencilSimple } from "@phosphor-icons/react";
+import { Rocket, Plus, CalendarBlank, ChartLine, PencilSimple, FunnelSimple } from "@phosphor-icons/react";
 import BurndownDialog from "@/components/BurndownDialog";
 import ProjectDialog from "@/components/ProjectDialog";
+
+const SPRINT_STATUSES = [
+  { v: "planned", l: "Planned" },
+  { v: "active", l: "Active" },
+  { v: "completed", l: "Completed" },
+];
 
 export default function Sprints() {
   const { currentOrg } = useOrg();
@@ -24,6 +30,8 @@ export default function Sprints() {
   const [burndown, setBurndown] = useState({ open: false, sprint: null });
   const [editProject, setEditProject] = useState({ open: false, project: null });
   const [form, setForm] = useState({ project_id: "", name: "", goal: "", start_date: "", end_date: "" });
+  const [filterProject, setFilterProject] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
 
   const load = async () => {
     if (!currentOrg) return;
@@ -64,8 +72,41 @@ export default function Sprints() {
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <FunnelSimple size={16} className="text-slate-400" />
+        <Select value={filterProject} onValueChange={setFilterProject}>
+          <SelectTrigger className="w-56 bg-white" data-testid="sprint-filter-project">
+            <SelectValue placeholder="Project" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All projects</SelectItem>
+            {projects.map((p) => (
+              <SelectItem key={p.project_id} value={p.project_id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterStatus} onValueChange={setFilterStatus}>
+          <SelectTrigger className="w-44 bg-white" data-testid="sprint-filter-status">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            {SPRINT_STATUSES.map((s) => (
+              <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {(filterProject !== "all" || filterStatus !== "all") && (
+          <Button variant="ghost" size="sm" onClick={() => { setFilterProject("all"); setFilterStatus("all"); }} data-testid="sprint-filter-clear">
+            Clear
+          </Button>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {sprints.map((s) => {
+        {sprints
+          .filter((s) => (filterProject === "all" || s.project_id === filterProject) && (filterStatus === "all" || s.status === filterStatus))
+          .map((s) => {
           const st = sprintStats(s.sprint_id);
           const project = projects.find((p) => p.project_id === s.project_id);
           return (
@@ -114,8 +155,10 @@ export default function Sprints() {
             </Card>
           );
         })}
-        {sprints.length === 0 && (
-          <div className="col-span-full text-center py-12 text-slate-500">No sprints yet.</div>
+        {sprints.filter((s) => (filterProject === "all" || s.project_id === filterProject) && (filterStatus === "all" || s.status === filterStatus)).length === 0 && (
+          <div className="col-span-full text-center py-12 text-slate-500">
+            {sprints.length === 0 ? "No sprints yet." : "No sprints match these filters."}
+          </div>
         )}
       </div>
 
