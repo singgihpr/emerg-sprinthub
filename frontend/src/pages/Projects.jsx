@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { FolderOpen, Plus, PencilSimple } from "@phosphor-icons/react";
+import { FolderOpen, Plus, PencilSimple, FunnelSimple } from "@phosphor-icons/react";
 import ProjectDialog from "@/components/ProjectDialog";
 
 const STATUS_STYLES = {
@@ -31,6 +31,7 @@ export default function Projects() {
   const [open, setOpen] = useState(false);
   const [editDialog, setEditDialog] = useState({ open: false, project: null });
   const [form, setForm] = useState({ name: "", key: "", description: "", color: "#4F46E5", status: "active" });
+  const [filterStatus, setFilterStatus] = useState("all");
 
   const load = async () => {
     if (!currentOrg) return;
@@ -64,8 +65,29 @@ export default function Projects() {
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <FunnelSimple size={16} className="text-slate-400" />
+        <Select value={filterStatus} onValueChange={setFilterStatus}>
+          <SelectTrigger className="w-44 bg-white" data-testid="project-filter-status">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="planning">Planning</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="on_hold">On Hold</SelectItem>
+            <SelectItem value="archived">Archived</SelectItem>
+          </SelectContent>
+        </Select>
+        {filterStatus !== "all" && (
+          <Button variant="ghost" size="sm" onClick={() => setFilterStatus("all")} data-testid="project-filter-clear">
+            Clear
+          </Button>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {projects.map((p) => (
+        {projects.filter((p) => filterStatus === "all" || p.status === filterStatus).map((p) => (
           <Card key={p.project_id} className="p-6 card-hover border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col" data-testid={`project-card-${p.project_id}`}>
             <div className="flex items-start justify-between">
               <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: `${p.color}20`, color: p.color }}>
@@ -91,9 +113,11 @@ export default function Projects() {
             </div>
           </Card>
         ))}
-        {projects.length === 0 && (
+        {projects.filter((p) => filterStatus === "all" || p.status === filterStatus).length === 0 && (
           <div className="col-span-full text-center py-12 text-slate-500">
-            {canManage ? "No projects yet. Create one to get started." : "You don't belong to any project yet. Ask an admin to add you."}
+            {projects.length === 0
+              ? (canManage ? "No projects yet. Create one to get started." : "You don't belong to any project yet. Ask an admin to add you.")
+              : "No projects match this filter."}
           </div>
         )}
       </div>
