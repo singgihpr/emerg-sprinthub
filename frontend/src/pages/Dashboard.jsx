@@ -1,11 +1,13 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { api } from "@/lib/api";
 import { useOrg } from "@/context/OrgContext";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { CheckCircle, Clock, ListChecks, TrendUp, CalendarBlank } from "@phosphor-icons/react";
+import { CheckCircle, Clock, ListChecks, TrendUp, CalendarBlank, FileCsv, FilePdf } from "@phosphor-icons/react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid, PieChart, Pie, Cell } from "recharts";
+import { exportCSV, exportPDF } from "@/lib/analyticsExport";
 
 const STATUS_COLORS = { todo: "#94A3B8", in_progress: "#3B82F6", review: "#F59E0B", done: "#10B981" };
 const STATUS_LABELS = { todo: "To Do", in_progress: "In Progress", review: "Review", done: "Done" };
@@ -25,6 +27,9 @@ export default function Dashboard({ withPeriodFilter = false }) {
   const [period, setPeriod] = useState("30d");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
+  const [refData, setRefData] = useState({ tasks: [], projects: [], members: [] });
+  const [exporting, setExporting] = useState(false);
+  const chartsRef = useRef(null);
 
   const range = useMemo(() => {
     if (!withPeriodFilter) return null;
@@ -43,6 +48,35 @@ export default function Dashboard({ withPeriodFilter = false }) {
     setData(null);
     api.get(url).then((r) => setData(r.data));
   }, [currentOrg, withPeriodFilter, range]);
+
+  useEffect(() => {
+    if (!currentOrg || !withPeriodFilter) return;
+    Promise.all([
+      api.get(`/orgs/${currentOrg.org_id}/tasks`),
+      api.get(`/orgs/${currentOrg.org_id}/projects`),
+      api.get(`/orgs/${currentOrg.org_id}/members`),
+    ]).then(([t, p, m]) => setRefData({ tasks: t.data, projects: p.data, members: m.data }));
+  }, [currentOrg, withPeriodFilter]);
+
+  const projectMap = useMemo(() => Object.fromEntries(refData.projects.map((p) => [p.project_id, p])), [refData.projects]);
+  const memberMap = useMemo(() => Object.fromEntries(refData.members.map((m) => [m.user_id, m])), [refData.members]);
+  const scopedTasks = useMemo(() => {
+    if (!range) return [];
+    return refData.tasks.filter((t) => {
+      const d = (t.created_at || "").slice(0, 10);
+      return d >= range.start && d <= range.end;
+    });
+  }, [refData.tasks, range]);
+
+  const doExportCSV = () => exportCSV({ orgName: currentOrg.name, range, data, tasks: scopedTasks, projectMap, memberMap });
+  const doExportPDF = async () => {
+    setExporting(true);
+    try {
+      await exportPDF({ orgName: currentOrg.name, range, data, tasks: scopedTasks, projectMap, memberMap, chartsEl: chartsRef.current });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   if (!currentOrg) return <div className="p-8 text-slate-500">Loading workspace…</div>;
 
@@ -78,6 +112,12 @@ export default function Dashboard({ withPeriodFilter = false }) {
                 <Input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="h-10 w-40 bg-white" data-testid="analytics-custom-end" />
               </>
             )}
+            <Button variant="outline" size="sm" className="h-10 gap-2 bg-white" onClick={doExportCSV} disabled={!data || !range} data-testid="export-csv-btn">
+              <FileCsv size={16} weight="duotone" /> CSV
+            </Button>
+            <Button variant="outline" size="sm" className="h-10 gap-2 bg-white" onClick={doExportPDF} disabled={!data || !range || exporting} data-testid="export-pdf-btn">
+              <FilePdf size={16} weight="duotone" /> {exporting ? "Exporting…" : "PDF"}
+            </Button>
           </div>
         )}
       </div>
@@ -85,13 +125,13 @@ export default function Dashboard({ withPeriodFilter = false }) {
       {!data ? (
         <div className="text-slate-500">Loading analytics…</div>
       ) : (
-        <DashboardBody data={data} trendLabel={trendLabel} />
+        <DashboardBody data={data} trendLabel={trendLabel} chartsRef={chartsRef} />
       )}
     </div>
   );
 }
 
-function DashboardBody({ data, trendLabel }) {
+function DashboardBody({ data, trendLabel, chartsRef }) {
   const pie = Object.entries(data.by_status).map(([k, v]) => ({ name: STATUS_LABELS[k], value: v, key: k }));
   const totalHours = (data.total_logged_minutes / 60).toFixed(1);
 
@@ -116,6 +156,7 @@ function DashboardBody({ data, trendLabel }) {
         ))}
       </div>
 
+      <div ref={chartsRef} className="space-y-6 bg-white">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="p-6 lg:col-span-2 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
           <div className="flex items-center justify-between mb-6">
@@ -175,6 +216,7 @@ function DashboardBody({ data, trendLabel }) {
           </BarChart>
         </ResponsiveContainer>
       </Card>
+      </div>
     </>
   );
 }
