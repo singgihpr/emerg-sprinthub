@@ -22,7 +22,7 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
   const { currentOrg } = useOrg();
   const [form, setForm] = useState({
     title: "", description: "", status: "todo", priority: "medium", type: "task",
-    project_id: "", assignee_id: "", sprint_id: "", start_date: "", due_date: "", estimate_hours: 0,
+    project_id: "", assignee_id: "", sprint_id: "", start_date: "", due_date: "", estimate_hours: 0, repeat: "none",
   });
 
   useEffect(() => {
@@ -33,13 +33,13 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
         type: task.type || "task", project_id: task.project_id || "",
         assignee_id: task.assignee_id || "", sprint_id: task.sprint_id || "",
         start_date: task.start_date || "", due_date: task.due_date || "",
-        estimate_hours: task.estimate_hours || 0,
+        estimate_hours: task.estimate_hours || 0, repeat: task.repeat || "none",
       });
     } else {
       setForm({
         title: "", description: "", status: "todo", priority: "medium", type: "task",
         project_id: projects?.[0]?.project_id || "", assignee_id: "", sprint_id: "",
-        start_date: "", due_date: "", estimate_hours: 0,
+        start_date: "", due_date: "", estimate_hours: 0, repeat: "none",
       });
     }
   }, [task, open, projects]);
@@ -55,6 +55,7 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
       due_date: form.due_date || null,
     };
     if (task) {
+      delete payload.repeat;
       await api.patch(`/orgs/${currentOrg.org_id}/tasks/${task.task_id}`, payload);
     } else {
       await api.post(`/orgs/${currentOrg.org_id}/tasks`, payload);
@@ -144,6 +145,23 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
               <Input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="mt-1.5" />
             </div>
           </div>
+          {!task && (
+            <div>
+              <Label>Repeat</Label>
+              <Select value={form.repeat} onValueChange={(v) => setForm({ ...form, repeat: v })}>
+                <SelectTrigger className="mt-1.5" data-testid="task-repeat-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Does not repeat</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+              {form.repeat !== "none" && (
+                <p className="text-xs text-slate-500 mt-1.5">A new task will be created automatically each {form.repeat === "daily" ? "day" : form.repeat === "weekly" ? "week" : "month"}, based on the start date.</p>
+              )}
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button className="bg-indigo-600 hover:bg-indigo-700" onClick={save} data-testid="task-save-btn">{task ? "Save changes" : "Create task"}</Button>

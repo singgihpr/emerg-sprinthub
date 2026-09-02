@@ -7,3 +7,11 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: spawn-recurring
+    description: "Spawns due recurring task instances (standups/check-ins/routines) once a day"
+    cron: "10 0 * * *"
+    timezone: "UTC"
+    endpoint: "{{BASE_URL}}/api/cron/spawn-recurring"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

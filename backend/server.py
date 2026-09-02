@@ -9,7 +9,8 @@ import logging
 import bcrypt
 import jwt
 import httpx
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
+import calendar as _calendar
 from typing import List, Optional, Literal
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from fastapi.responses import JSONResponse
@@ -187,6 +188,7 @@ class TaskCreate(BaseModel):
     start_date: Optional[str] = None
     due_date: Optional[str] = None
     estimate_hours: Optional[float] = 0
+    repeat: Optional[Literal["none", "daily", "weekly", "monthly"]] = "none"
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -668,6 +670,8 @@ async def list_tasks(org_id: str, user: dict = Depends(get_current_user)):
 @api.post("/orgs/{org_id}/tasks")
 async def create_task(org_id: str, body: TaskCreate, user: dict = Depends(get_current_user)):
     await require_project_access(org_id, body.project_id, user)
+    repeat = body.repeat or "none"
+    recurring_id = new_id("rec") if repeat in ("daily", "weekly", "monthly") else None
     doc = {
         "task_id": new_id("tsk"), "org_id": org_id,
         "project_id": body.project_id, "title": body.title,
@@ -677,13 +681,49 @@ async def create_task(org_id: str, body: TaskCreate, user: dict = Depends(get_cu
         "start_date": body.start_date, "due_date": body.due_date,
         "estimate_hours": body.estimate_hours or 0,
         "logged_minutes": 0,
+        "recurring_id": recurring_id, "repeat": repeat,
         "created_by": user["user_id"], "created_at": now_utc().isoformat(),
         "updated_at": now_utc().isoformat(),
         "completed_at": None
     }
     await db.tasks.insert_one(dict(doc))
     doc.pop("_id", None)
+    if recurring_id:
+        base = body.start_date or now_utc().date().isoformat()
+        try:
+            base_date = date.fromisoformat(base)
+        except ValueError:
+            base_date = now_utc().date()
+        next_start = _advance_date(base_date, repeat)
+        await db.recurring_tasks.insert_one({
+            "recurring_id": recurring_id, "org_id": org_id, "project_id": body.project_id,
+            "title": body.title, "description": body.description or "",
+            "priority": body.priority, "type": body.type,
+            "assignee_id": body.assignee_id, "sprint_id": body.sprint_id,
+            "estimate_hours": body.estimate_hours or 0,
+            "frequency": repeat, "next_start": next_start.isoformat(),
+            "active": True, "created_by": user["user_id"],
+            "created_at": now_utc().isoformat(), "last_spawned_at": None,
+        })
     return doc
+
+@api.get("/orgs/{org_id}/recurring")
+async def list_recurring(org_id: str, user: dict = Depends(get_current_user)):
+    m = await ensure_member(org_id, user["user_id"])
+    allowed = await _get_accessible_project_ids(org_id, user["user_id"], m["role"])
+    q = {"org_id": org_id, "active": True}
+    if allowed is not None:
+        q["project_id"] = {"$in": allowed}
+    return await db.recurring_tasks.find(q, {"_id": 0}).to_list(1000)
+
+@api.delete("/orgs/{org_id}/recurring/{recurring_id}")
+async def stop_recurring(org_id: str, recurring_id: str, user: dict = Depends(get_current_user)):
+    tpl = await db.recurring_tasks.find_one({"recurring_id": recurring_id, "org_id": org_id})
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Recurring schedule not found")
+    await require_project_access(org_id, tpl["project_id"], user)
+    await db.recurring_tasks.update_one({"recurring_id": recurring_id, "org_id": org_id}, {"$set": {"active": False}})
+    return {"status": "stopped"}
 
 @api.patch("/orgs/{org_id}/tasks/{task_id}")
 async def update_task(org_id: str, task_id: str, body: TaskUpdate, user: dict = Depends(get_current_user)):
@@ -1224,6 +1264,65 @@ async def cron_weekly_digest(request: Request):
     await db.cron_runs.insert_one({"run_id": run_id, "at": now_utc().isoformat(), "name": "weekly-digest"})
     import asyncio as _asyncio
     _asyncio.create_task(_build_and_send_digest())
+    return {"ok": True, "queued": True}
+
+
+def _advance_date(d: date, freq: str) -> date:
+    if freq == "weekly":
+        return d + timedelta(days=7)
+    if freq == "monthly":
+        y = d.year + (1 if d.month == 12 else 0)
+        mo = 1 if d.month == 12 else d.month + 1
+        last = _calendar.monthrange(y, mo)[1]
+        return date(y, mo, min(d.day, last))
+    return d + timedelta(days=1)
+
+
+async def _spawn_recurring():
+    today = now_utc().date()
+    templates = await db.recurring_tasks.find({"active": True}).to_list(1000)
+    for tpl in templates:
+        try:
+            next_start = date.fromisoformat(tpl["next_start"])
+        except (ValueError, KeyError):
+            continue
+        guard = 0
+        while next_start <= today and guard < 366:
+            guard += 1
+            task_doc = {
+                "task_id": new_id("tsk"), "org_id": tpl["org_id"],
+                "project_id": tpl["project_id"], "title": tpl["title"],
+                "description": tpl.get("description", ""), "status": "todo",
+                "priority": tpl.get("priority", "medium"), "type": tpl.get("type", "routine"),
+                "assignee_id": tpl.get("assignee_id"), "sprint_id": tpl.get("sprint_id"),
+                "start_date": next_start.isoformat(), "due_date": next_start.isoformat(),
+                "estimate_hours": tpl.get("estimate_hours", 0), "logged_minutes": 0,
+                "recurring_id": tpl["recurring_id"], "repeat": tpl["frequency"],
+                "created_by": tpl.get("created_by"), "created_at": now_utc().isoformat(),
+                "updated_at": now_utc().isoformat(), "completed_at": None,
+            }
+            await db.tasks.insert_one(dict(task_doc))
+            next_start = _advance_date(next_start, tpl["frequency"])
+        await db.recurring_tasks.update_one(
+            {"recurring_id": tpl["recurring_id"]},
+            {"$set": {"next_start": next_start.isoformat(), "last_spawned_at": now_utc().isoformat()}},
+        )
+
+
+@app.post("/api/cron/spawn-recurring")
+async def cron_spawn_recurring(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    if not secret or not auth.startswith("Bearer ") or auth[7:] != secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = request.headers.get("X-Webhook-Id") or f"local-{now_utc().timestamp()}"
+    dup = await db.cron_runs.find_one({"run_id": run_id})
+    if dup:
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({"run_id": run_id, "at": now_utc().isoformat(), "name": "spawn-recurring"})
+    import asyncio as _asyncio
+    _asyncio.create_task(_spawn_recurring())
     return {"ok": True, "queued": True}
 
 
