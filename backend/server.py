@@ -174,7 +174,11 @@ class SprintCreate(BaseModel):
     end_date: Optional[str] = None
 
 class SprintUpdate(BaseModel):
-    status: Literal["planned", "active", "completed"]
+    name: Optional[str] = None
+    goal: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    status: Optional[Literal["planned", "active", "completed"]] = None
 
 class TaskCreate(BaseModel):
     project_id: str
@@ -651,9 +655,27 @@ async def update_sprint(org_id: str, sprint_id: str, body: SprintUpdate, user: d
     m = await require_project_access(org_id, sprint["project_id"], user)
     if m["role"] not in ("owner", "admin", "manager"):
         raise HTTPException(status_code=403, detail="Requires manager or higher role")
-    await db.sprints.update_one({"sprint_id": sprint_id, "org_id": org_id}, {"$set": {"status": body.status}})
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    await db.sprints.update_one({"sprint_id": sprint_id, "org_id": org_id}, {"$set": updates})
     updated = await db.sprints.find_one({"sprint_id": sprint_id, "org_id": org_id}, {"_id": 0})
     return updated
+
+@api.delete("/orgs/{org_id}/sprints/{sprint_id}")
+async def delete_sprint(org_id: str, sprint_id: str, user: dict = Depends(get_current_user)):
+    sprint = await db.sprints.find_one({"sprint_id": sprint_id, "org_id": org_id})
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+    m = await require_project_access(org_id, sprint["project_id"], user)
+    if m["role"] not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Requires manager or higher role")
+    await db.tasks.update_many(
+        {"org_id": org_id, "sprint_id": sprint_id},
+        {"$set": {"sprint_id": None, "former_sprint_name": sprint["name"]}}
+    )
+    await db.sprints.delete_one({"sprint_id": sprint_id, "org_id": org_id})
+    return {"ok": True}
 
 # ----------------------
 # Tasks
@@ -732,6 +754,8 @@ async def update_task(org_id: str, task_id: str, body: TaskUpdate, user: dict = 
     updates["updated_at"] = now_utc().isoformat()
     if updates.get("status") == "done":
         updates["completed_at"] = now_utc().isoformat()
+    if updates.get("sprint_id"):
+        updates["former_sprint_name"] = None
     result = await db.tasks.update_one({"task_id": task_id, "org_id": org_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -146,12 +146,9 @@ export default function ProjectDialog({ open, onOpenChange, project, orgMembers,
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Status</Label>
-                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })} disabled={!canManage}>
-                  <SelectTrigger className="mt-1.5" data-testid="project-status-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTS.map((s) => <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Combobox value={form.status} onValueChange={(v) => setForm({ ...form, status: v })} disabled={!canManage}
+                  options={STATUS_OPTS.map((s) => ({ value: s.v, label: s.l }))}
+                  className="mt-1.5" data-testid="project-status-select" />
               </div>
               <div>
                 <Label>Color</Label>
@@ -207,30 +204,24 @@ export default function ProjectDialog({ open, onOpenChange, project, orgMembers,
               <div className="border border-dashed border-slate-300 rounded-lg p-4 space-y-3">
                 <div className="text-xs uppercase tracking-wider text-slate-500 font-medium">Add a member</div>
                 <div className="flex flex-wrap gap-2">
-                  <Select value={newMemberId} onValueChange={setNewMemberId}>
-                    <SelectTrigger className="flex-1 min-w-[220px]" data-testid="add-project-member-select">
-                      <SelectValue placeholder="Choose an organization member" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableMembers.length === 0 ? (
-                        <div className="p-2 text-sm text-slate-500">All org members are already in this project.</div>
-                      ) : availableMembers.map((m) => (
-                        <SelectItem key={m.user_id} value={m.user_id}>
-                          <div className="flex flex-col">
-                            <span>{m.name || m.email}</span>
-                            {m.name && m.email && m.name !== m.email && <span className="text-xs text-slate-500">{m.email}</span>}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={newMemberRole} onValueChange={setNewMemberRole}>
-                    <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="member">Member</SelectItem>
-                      <SelectItem value="lead">Lead</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Combobox value={newMemberId} onValueChange={setNewMemberId}
+                    placeholder="Choose an organization member"
+                    emptyText="All org members are already in this project."
+                    options={availableMembers.map((m) => ({
+                      value: m.user_id,
+                      label: m.name || m.email,
+                      keywords: [m.email],
+                      render: (
+                        <div className="flex flex-col">
+                          <span>{m.name || m.email}</span>
+                          {m.name && m.email && m.name !== m.email && <span className="text-xs text-slate-500">{m.email}</span>}
+                        </div>
+                      ),
+                    }))}
+                    className="flex-1 min-w-[220px]" data-testid="add-project-member-select" />
+                  <Combobox value={newMemberRole} onValueChange={setNewMemberRole}
+                    options={[{ value: "member", label: "Member" }, { value: "lead", label: "Lead" }]}
+                    className="w-32" />
                   <Button disabled={!newMemberId || busy} className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={addMember} data-testid="add-project-member-btn">
                     <UserPlus size={14} /> Add
                   </Button>

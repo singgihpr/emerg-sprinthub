@@ -4,7 +4,7 @@ import { useOrg } from "@/context/OrgContext";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { CheckCircle, Clock, ListChecks, TrendUp, CalendarBlank, FileCsv, FilePdf } from "@phosphor-icons/react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 import { exportCSV, exportPDF } from "@/lib/analyticsExport";
@@ -95,16 +95,9 @@ export default function Dashboard({ withPeriodFilter = false }) {
         {withPeriodFilter && (
           <div className="flex flex-wrap items-center gap-2" data-testid="analytics-period-controls">
             <CalendarBlank size={16} className="text-slate-400" />
-            <Select value={period} onValueChange={setPeriod}>
-              <SelectTrigger className="h-10 w-44 bg-white" data-testid="analytics-period-select">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PERIODS.map((p) => (
-                  <SelectItem key={p.v} value={p.v} data-testid={`analytics-period-${p.v}`}>{p.l}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox value={period} onValueChange={setPeriod}
+              options={PERIODS.map((p) => ({ value: p.v, label: p.l }))}
+              className="h-10 w-44 bg-white" data-testid="analytics-period-select" />
             {period === "custom" && (
               <>
                 <Input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="h-10 w-40 bg-white" data-testid="analytics-custom-start" />

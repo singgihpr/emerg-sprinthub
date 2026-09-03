@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FolderOpen, Plus, PencilSimple, FunnelSimple } from "@phosphor-icons/react";
 import ProjectDialog from "@/components/ProjectDialog";
@@ -67,18 +67,15 @@ export default function Projects() {
 
       <div className="flex flex-wrap items-center gap-3">
         <FunnelSimple size={16} className="text-slate-400" />
-        <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="w-44 bg-white" data-testid="project-filter-status">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="planning">Planning</SelectItem>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="on_hold">On Hold</SelectItem>
-            <SelectItem value="archived">Archived</SelectItem>
-          </SelectContent>
-        </Select>
+        <Combobox value={filterStatus} onValueChange={setFilterStatus} placeholder="Status"
+          options={[
+            { value: "all", label: "All statuses" },
+            { value: "planning", label: "Planning" },
+            { value: "active", label: "Active" },
+            { value: "on_hold", label: "On Hold" },
+            { value: "archived", label: "Archived" },
+          ]}
+          className="w-44 bg-white" data-testid="project-filter-status" />
         {filterStatus !== "all" && (
           <Button variant="ghost" size="sm" onClick={() => setFilterStatus("all")} data-testid="project-filter-clear">
             Clear
@@ -132,15 +129,14 @@ export default function Projects() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Status</Label>
-                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
-                  <SelectTrigger className="mt-1.5" data-testid="project-create-status"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="planning">Planning</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="on_hold">On hold</SelectItem>
-                    <SelectItem value="archived">Archived</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Combobox value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}
+                  options={[
+                    { value: "planning", label: "Planning" },
+                    { value: "active", label: "Active" },
+                    { value: "on_hold", label: "On hold" },
+                    { value: "archived", label: "Archived" },
+                  ]}
+                  className="mt-1.5" data-testid="project-create-status" />
               </div>
               <div><Label>Color</Label><Input type="color" className="mt-1.5 h-10 w-24" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></div>
             </div>

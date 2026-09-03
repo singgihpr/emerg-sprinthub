@@ -14,6 +14,8 @@ const STATUS_STYLES = {
   done: "bg-emerald-100 text-emerald-700",
 };
 const STATUS_LABELS = { todo: "To Do", in_progress: "In Progress", review: "Review", done: "Done" };
+const STATUS_ORDER = ["todo", "in_progress", "review", "done"];
+const STATUS_TEXT = { todo: "text-slate-600", in_progress: "text-blue-700", review: "text-amber-700", done: "text-emerald-700" };
 const PRIO = {
   urgent: "bg-red-100 text-red-700",
   high: "bg-orange-100 text-orange-700",
@@ -21,7 +23,7 @@ const PRIO = {
   low: "bg-slate-50 text-slate-500",
 };
 
-export default function ListView({ tasks, projects, members, onEdit, reload, groupByProject = false }) {
+export default function ListView({ tasks, projects, members, onEdit, reload, groupByProject = false, statusFilter = "all" }) {
   const { currentOrg } = useOrg();
   const projectMap = Object.fromEntries(projects.map((p) => [p.project_id, p]));
   const memberMap = Object.fromEntries(members.map((m) => [m.user_id, m]));
@@ -37,61 +39,88 @@ export default function ListView({ tasks, projects, members, onEdit, reload, gro
     reload();
   };
 
-  const TaskTable = ({ rows, showProjectCol = true }) => (
-    <table className="w-full text-sm">
-      <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-        <tr>
-          <th className="text-left px-4 py-3 font-medium">Task</th>
-          {showProjectCol && <th className="text-left px-4 py-3 font-medium">Project</th>}
-          <th className="text-left px-4 py-3 font-medium">Status</th>
-          <th className="text-left px-4 py-3 font-medium">Priority</th>
-          <th className="text-left px-4 py-3 font-medium">Assignee</th>
-          <th className="text-left px-4 py-3 font-medium">Due</th>
-          <th className="text-left px-4 py-3 font-medium">Time</th>
-          <th className="text-right px-4 py-3 font-medium">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((t) => {
-          const a = memberMap[t.assignee_id];
-          const logged = t.logged_minutes || 0;
-          return (
-            <tr key={t.task_id} className="border-t border-slate-100 hover:bg-slate-50/50" data-testid={`task-row-${t.task_id}`}>
-              <td className="px-4 py-3 font-medium text-slate-900">{t.title}</td>
-              {showProjectCol && (
-                <td className="px-4 py-3">
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{projectMap[t.project_id]?.key || "—"}</span>
-                </td>
+  const renderRow = (t, showProjectCol = true) => {
+    const a = memberMap[t.assignee_id];
+    const logged = t.logged_minutes || 0;
+    return (
+      <tr key={t.task_id} className="border-t border-slate-100 hover:bg-slate-50/50" data-testid={`task-row-${t.task_id}`}>
+        <td className="px-4 py-3 font-medium text-slate-900">
+          {t.title}
+          {!t.sprint_id && t.former_sprint_name && (
+            <Badge variant="secondary" className="ml-2 text-[10px] font-normal" data-testid={`former-sprint-tag-${t.task_id}`}>
+              from {t.former_sprint_name}
+            </Badge>
+          )}
+        </td>
+        {showProjectCol && (
+          <td className="px-4 py-3">
+            <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{projectMap[t.project_id]?.key || "—"}</span>
+          </td>
+        )}
+        <td className="px-4 py-3">
+          <Badge className={`${STATUS_STYLES[t.status]} border-0 font-normal`}>{STATUS_LABELS[t.status]}</Badge>
+        </td>
+        <td className="px-4 py-3">
+          <Badge className={`${PRIO[t.priority]} border-0 font-normal capitalize`}>{t.priority}</Badge>
+        </td>
+        <td className="px-4 py-3">
+          {a ? (
+            <div className="flex items-center gap-2">
+              <Avatar className="h-6 w-6"><AvatarImage src={a.picture} /><AvatarFallback className="text-[10px] bg-indigo-100 text-indigo-700">{(a.name || a.email).slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
+              <span className="text-slate-700 text-xs">{a.name || a.email}</span>
+            </div>
+          ) : <span className="text-slate-400 text-xs">Unassigned</span>}
+        </td>
+        <td className="px-4 py-3 text-slate-600 text-xs">{t.due_date || "—"}</td>
+        <td className="px-4 py-3 text-slate-600 text-xs font-mono">{Math.floor(logged / 60)}h {logged % 60}m</td>
+        <td className="px-4 py-3">
+          <div className="flex items-center justify-end gap-1">
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-orange-50 hover:text-orange-600" onClick={() => startTimer(t)} data-testid={`start-timer-${t.task_id}`}><Play size={14} weight="fill" /></Button>
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => onEdit(t)} data-testid={`edit-task-${t.task_id}`}><PencilSimple size={14} /></Button>
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600" onClick={() => del(t)} data-testid={`delete-task-${t.task_id}`}><Trash size={14} /></Button>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
+  const TaskTable = ({ rows, showProjectCol = true }) => {
+    const colCount = showProjectCol ? 8 : 7;
+    const sections = statusFilter === "all"
+      ? STATUS_ORDER.filter((st) => rows.some((t) => t.status === st))
+      : [null];
+    return (
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
+          <tr>
+            <th className="text-left px-4 py-3 font-medium">Task</th>
+            {showProjectCol && <th className="text-left px-4 py-3 font-medium">Project</th>}
+            <th className="text-left px-4 py-3 font-medium">Status</th>
+            <th className="text-left px-4 py-3 font-medium">Priority</th>
+            <th className="text-left px-4 py-3 font-medium">Assignee</th>
+            <th className="text-left px-4 py-3 font-medium">Due</th>
+            <th className="text-left px-4 py-3 font-medium">Time</th>
+            <th className="text-right px-4 py-3 font-medium">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sections.map((st) => (
+            <React.Fragment key={st || "rows"}>
+              {st && (
+                <tr className="border-t border-slate-200 bg-slate-50/80" data-testid={`status-section-${st}`}>
+                  <td colSpan={colCount} className="px-4 py-2">
+                    <span className={`text-xs font-semibold uppercase tracking-wider ${STATUS_TEXT[st]}`}>{STATUS_LABELS[st]}</span>
+                    <span className="ml-2 text-xs text-slate-400">{rows.filter((t) => t.status === st).length}</span>
+                  </td>
+                </tr>
               )}
-              <td className="px-4 py-3">
-                <Badge className={`${STATUS_STYLES[t.status]} border-0 font-normal`}>{STATUS_LABELS[t.status]}</Badge>
-              </td>
-              <td className="px-4 py-3">
-                <Badge className={`${PRIO[t.priority]} border-0 font-normal capitalize`}>{t.priority}</Badge>
-              </td>
-              <td className="px-4 py-3">
-                {a ? (
-                  <div className="flex items-center gap-2">
-                    <Avatar className="h-6 w-6"><AvatarImage src={a.picture} /><AvatarFallback className="text-[10px] bg-indigo-100 text-indigo-700">{(a.name || a.email).slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
-                    <span className="text-slate-700 text-xs">{a.name || a.email}</span>
-                  </div>
-                ) : <span className="text-slate-400 text-xs">Unassigned</span>}
-              </td>
-              <td className="px-4 py-3 text-slate-600 text-xs">{t.due_date || "—"}</td>
-              <td className="px-4 py-3 text-slate-600 text-xs font-mono">{Math.floor(logged / 60)}h {logged % 60}m</td>
-              <td className="px-4 py-3">
-                <div className="flex items-center justify-end gap-1">
-                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-orange-50 hover:text-orange-600" onClick={() => startTimer(t)} data-testid={`start-timer-${t.task_id}`}><Play size={14} weight="fill" /></Button>
-                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => onEdit(t)} data-testid={`edit-task-${t.task_id}`}><PencilSimple size={14} /></Button>
-                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600" onClick={() => del(t)} data-testid={`delete-task-${t.task_id}`}><Trash size={14} /></Button>
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+              {(st ? rows.filter((t) => t.status === st) : rows).map((t) => renderRow(t, showProjectCol))}
+            </React.Fragment>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
 
   if (!groupByProject) {
     return (

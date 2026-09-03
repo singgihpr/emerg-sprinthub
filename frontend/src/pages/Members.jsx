@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -84,10 +84,9 @@ export default function Members() {
             <div><Label>Full name</Label><Input className="mt-1.5" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="invite-name-input" /></div>
             <div><Label>Email</Label><Input className="mt-1.5" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="invite-email-input" /></div>
             <div><Label>Role</Label>
-              <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>{ROLES.map((r) => <SelectItem key={r} value={r} className="capitalize">{r}</SelectItem>)}</SelectContent>
-              </Select>
+              <Combobox value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}
+                options={ROLES.map((r) => ({ value: r, label: r[0].toUpperCase() + r.slice(1) }))}
+                className="mt-1.5" />
             </div>
             <p className="text-xs text-slate-500">The new member gets default password <span className="font-mono">Welcome@123</span> if not registered yet.</p>
             <Button className="w-full bg-indigo-600 hover:bg-indigo-700" onClick={invite} data-testid="invite-submit-btn">Add member</Button>

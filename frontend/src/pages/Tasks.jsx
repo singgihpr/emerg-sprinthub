@@ -5,10 +5,10 @@ import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users, User, FolderOpen, CircleDashed } from "@phosphor-icons/react";
+import { Plus, MagnifyingGlass, ListBullets, Kanban, ChartBar, CalendarBlank, Users, User, FolderOpen, CircleDashed, Rocket } from "@phosphor-icons/react";
 import TaskDialog from "@/components/TaskDialog";
 import ListView from "@/components/views/ListView";
 import BoardView from "@/components/views/BoardView";
@@ -43,6 +43,7 @@ export default function Tasks() {
   const [assignee, setAssignee] = useState(() => localStorage.getItem("task_assignee_filter") || "all");
   const [projectFilter, setProjectFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sprintFilter, setSprintFilter] = useState("all");
   const [groupByProject, setGroupByProject] = useState(false);
   const [dialog, setDialog] = useState({ open: false, task: null });
 
@@ -70,6 +71,8 @@ export default function Tasks() {
     if (query && !t.title.toLowerCase().includes(query.toLowerCase())) return false;
     if (projectFilter !== "all" && t.project_id !== projectFilter) return false;
     if (statusFilter !== "all" && t.status !== statusFilter) return false;
+    if (sprintFilter === "backlog" && t.sprint_id) return false;
+    if (sprintFilter !== "all" && sprintFilter !== "backlog" && t.sprint_id !== sprintFilter) return false;
     if (assignee === "all") return true;
     if (assignee === "me") return t.assignee_id === user?.user_id;
     if (assignee === "unassigned") return !t.assignee_id;
@@ -77,7 +80,21 @@ export default function Tasks() {
   });
 
   const props = { tasks: filtered, projects, members, sprints, onEdit: (task) => setDialog({ open: true, task }), reload: load };
-  const listProps = { ...props, groupByProject };
+  const listProps = { ...props, groupByProject, statusFilter };
+
+  const projectOptions = [{ value: "all", label: "All projects" }, ...projects.map((p) => ({ value: p.project_id, label: p.name }))];
+  const statusOptions = [{ value: "all", label: "All statuses" }, ...TASK_STATUSES.map((s) => ({ value: s.v, label: s.l }))];
+  const sprintOptions = [
+    { value: "all", label: "All sprints" },
+    { value: "backlog", label: "Backlog" },
+    ...sprints.map((s) => ({ value: s.sprint_id, label: s.name })),
+  ];
+  const assigneeOptions = [
+    { value: "all", label: "All assignees" },
+    { value: "me", label: "Assigned to me" },
+    { value: "unassigned", label: "Unassigned" },
+    ...members.filter((m) => m.user_id !== user?.user_id).map((m) => ({ value: m.user_id, label: m.name || m.email })),
+  ];
 
   return (
     <div className="p-8 space-y-6">
@@ -112,46 +129,18 @@ export default function Tasks() {
               <Label htmlFor="group-by-project" className="text-sm text-slate-600 cursor-pointer whitespace-nowrap">Group by project</Label>
             </div>
           )}
-          <Select value={projectFilter} onValueChange={setProjectFilter}>
-            <SelectTrigger className="h-10 w-48 bg-white" data-testid="project-filter">
-              <FolderOpen size={14} className="mr-1 text-slate-400" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" data-testid="project-filter-all">All projects</SelectItem>
-              {projects.map((p) => (
-                <SelectItem key={p.project_id} value={p.project_id}>{p.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-10 w-44 bg-white" data-testid="status-filter">
-              <CircleDashed size={14} className="mr-1 text-slate-400" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" data-testid="status-filter-all">All statuses</SelectItem>
-              {TASK_STATUSES.map((s) => (
-                <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={assignee} onValueChange={setAssignee}>
-            <SelectTrigger className="h-10 w-52 bg-white" data-testid="assignee-filter">
-              <User size={14} className="mr-1 text-slate-400" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" data-testid="filter-all">All assignees</SelectItem>
-              <SelectItem value="me" data-testid="filter-me">Assigned to me</SelectItem>
-              <SelectItem value="unassigned">Unassigned</SelectItem>
-              {members
-                .filter((m) => m.user_id !== user?.user_id)
-                .map((m) => (
-                  <SelectItem key={m.user_id} value={m.user_id}>{m.name || m.email}</SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
+          <Combobox value={projectFilter} onValueChange={setProjectFilter} options={projectOptions}
+            icon={<FolderOpen size={14} className="mr-1 text-slate-400 shrink-0" />}
+            className="h-10 w-48 bg-white" data-testid="project-filter" />
+          <Combobox value={statusFilter} onValueChange={setStatusFilter} options={statusOptions}
+            icon={<CircleDashed size={14} className="mr-1 text-slate-400 shrink-0" />}
+            className="h-10 w-44 bg-white" data-testid="status-filter" />
+          <Combobox value={sprintFilter} onValueChange={setSprintFilter} options={sprintOptions}
+            icon={<Rocket size={14} className="mr-1 text-slate-400 shrink-0" />}
+            className="h-10 w-48 bg-white" data-testid="sprint-filter" />
+          <Combobox value={assignee} onValueChange={setAssignee} options={assigneeOptions}
+            icon={<User size={14} className="mr-1 text-slate-400 shrink-0" />}
+            className="h-10 w-52 bg-white" data-testid="assignee-filter" />
           <div className="relative">
             <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tasks…" className="pl-9 h-10 w-64" data-testid="task-search" />

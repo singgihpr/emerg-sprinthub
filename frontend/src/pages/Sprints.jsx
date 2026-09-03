@@ -6,10 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Rocket, Plus, CalendarBlank, ChartLine, PencilSimple, FunnelSimple } from "@phosphor-icons/react";
+import { Rocket, Plus, CalendarBlank, ChartLine, PencilSimple, FunnelSimple, Trash } from "@phosphor-icons/react";
 import BurndownDialog from "@/components/BurndownDialog";
 import ProjectDialog from "@/components/ProjectDialog";
 
@@ -27,6 +27,7 @@ export default function Sprints() {
   const [tasks, setTasks] = useState([]);
   const [orgMembers, setOrgMembers] = useState([]);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
   const [burndown, setBurndown] = useState({ open: false, sprint: null });
   const [editProject, setEditProject] = useState({ open: false, project: null });
   const [form, setForm] = useState({ project_id: "", name: "", goal: "", start_date: "", end_date: "" });
@@ -45,11 +46,33 @@ export default function Sprints() {
   };
   useEffect(() => { load(); }, [currentOrg]);
 
+  const openCreate = () => {
+    setEditing(null);
+    setForm({ project_id: "", name: "", goal: "", start_date: "", end_date: "" });
+    setOpen(true);
+  };
+
+  const openEdit = (s) => {
+    setEditing(s);
+    setForm({ project_id: s.project_id, name: s.name, goal: s.goal || "", start_date: s.start_date || "", end_date: s.end_date || "" });
+    setOpen(true);
+  };
+
   const save = async () => {
     if (!form.name || !form.project_id) return;
-    await api.post(`/orgs/${currentOrg.org_id}/sprints`, form);
+    if (editing) {
+      await api.patch(`/orgs/${currentOrg.org_id}/sprints/${editing.sprint_id}`, form);
+    } else {
+      await api.post(`/orgs/${currentOrg.org_id}/sprints`, form);
+    }
     setForm({ project_id: "", name: "", goal: "", start_date: "", end_date: "" });
-    setOpen(false); load();
+    setEditing(null); setOpen(false); load();
+  };
+
+  const del = async (s) => {
+    if (!window.confirm(`Delete sprint "${s.name}"? Its tasks will move to Backlog.`)) return;
+    await api.delete(`/orgs/${currentOrg.org_id}/sprints/${s.sprint_id}`);
+    load();
   };
 
   const changeStatus = async (sid, status) => {
@@ -71,7 +94,7 @@ export default function Sprints() {
           <h1 className="font-display text-4xl font-semibold tracking-tight mt-1">Sprints</h1>
         </div>
         {canManage && (
-          <Button className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={() => setOpen(true)} data-testid="new-sprint-btn">
+          <Button className="bg-indigo-600 hover:bg-indigo-700 gap-2" onClick={openCreate} data-testid="new-sprint-btn">
             <Plus size={16} weight="bold" /> New sprint
           </Button>
         )}
@@ -79,28 +102,12 @@ export default function Sprints() {
 
       <div className="flex flex-wrap items-center gap-3">
         <FunnelSimple size={16} className="text-slate-400" />
-        <Select value={filterProject} onValueChange={setFilterProject}>
-          <SelectTrigger className="w-56 bg-white" data-testid="sprint-filter-project">
-            <SelectValue placeholder="Project" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All projects</SelectItem>
-            {projects.map((p) => (
-              <SelectItem key={p.project_id} value={p.project_id}>{p.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="w-44 bg-white" data-testid="sprint-filter-status">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {SPRINT_STATUSES.map((s) => (
-              <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Combobox value={filterProject} onValueChange={setFilterProject} placeholder="Project"
+          options={[{ value: "all", label: "All projects" }, ...projects.map((p) => ({ value: p.project_id, label: p.name }))]}
+          className="w-56 bg-white" data-testid="sprint-filter-project" />
+        <Combobox value={filterStatus} onValueChange={setFilterStatus} placeholder="Status"
+          options={[{ value: "all", label: "All statuses" }, ...SPRINT_STATUSES.map((s) => ({ value: s.v, label: s.l }))]}
+          className="w-44 bg-white" data-testid="sprint-filter-status" />
         {(filterProject !== "all" || filterStatus !== "all") && (
           <Button variant="ghost" size="sm" onClick={() => { setFilterProject("all"); setFilterStatus("all"); }} data-testid="sprint-filter-clear">
             Clear
@@ -136,20 +143,25 @@ export default function Sprints() {
                     )}
                   </div>
                 </div>
-                <Badge variant="secondary" className="capitalize">{s.status}</Badge>
+                <div className="flex items-center gap-1.5">
+                  <Badge variant="secondary" className="capitalize">{s.status}</Badge>
+                  {canManage && (
+                    <>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEdit(s)} data-testid={`edit-sprint-${s.sprint_id}`}>
+                        <PencilSimple size={13} />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 hover:bg-red-50 hover:text-red-600" onClick={() => del(s)} data-testid={`delete-sprint-${s.sprint_id}`}>
+                        <Trash size={13} />
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
               {canManage && (
                 <div className="mt-3">
-                  <Select value={s.status} onValueChange={(v) => changeStatus(s.sprint_id, v)}>
-                    <SelectTrigger className="w-40 h-8 text-xs bg-white" data-testid={`sprint-status-select-${s.sprint_id}`}>
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SPRINT_STATUSES.map((opt) => (
-                        <SelectItem key={opt.v} value={opt.v} data-testid={`sprint-status-option-${opt.v}`}>{opt.l}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Combobox value={s.status} onValueChange={(v) => changeStatus(s.sprint_id, v)} placeholder="Status"
+                    options={SPRINT_STATUSES.map((opt) => ({ value: opt.v, label: opt.l }))}
+                    className="w-40 h-8 text-xs bg-white" data-testid={`sprint-status-select-${s.sprint_id}`} />
                 </div>
               )}
               {s.goal && <p className="text-sm text-slate-600 mt-4">{s.goal}</p>}
@@ -181,15 +193,15 @@ export default function Sprints() {
         )}
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setEditing(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Create sprint</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editing ? "Edit sprint" : "Create sprint"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Project</Label>
-              <Select value={form.project_id} onValueChange={(v) => setForm({ ...form, project_id: v })}>
-                <SelectTrigger className="mt-1.5" data-testid="sprint-project-select"><SelectValue placeholder="Select project" /></SelectTrigger>
-                <SelectContent>{projects.map((p) => <SelectItem key={p.project_id} value={p.project_id}>{p.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <Combobox value={form.project_id} onValueChange={(v) => setForm({ ...form, project_id: v })}
+                placeholder="Select project" disabled={!!editing}
+                options={projects.map((p) => ({ value: p.project_id, label: p.name }))}
+                className="mt-1.5" data-testid="sprint-project-select" />
             </div>
             <div><Label>Name</Label><Input className="mt-1.5" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="sprint-name-input" /></div>
             <div><Label>Goal</Label><Textarea className="mt-1.5" rows={2} value={form.goal} onChange={(e) => setForm({ ...form, goal: e.target.value })} /></div>
@@ -197,7 +209,7 @@ export default function Sprints() {
               <div><Label>Start</Label><Input type="date" className="mt-1.5" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></div>
               <div><Label>End</Label><Input type="date" className="mt-1.5" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></div>
             </div>
-            <Button className="w-full bg-indigo-600 hover:bg-indigo-700" onClick={save} data-testid="sprint-save-btn">Create sprint</Button>
+            <Button className="w-full bg-indigo-600 hover:bg-indigo-700" onClick={save} data-testid="sprint-save-btn">{editing ? "Save changes" : "Create sprint"}</Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { api } from "@/lib/api";
 import { useOrg } from "@/context/OrgContext";
 import TaskComments from "@/components/TaskComments";
@@ -44,6 +44,11 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
     }
   }, [task, open, projects]);
 
+  const sprintOptions = [
+    { value: "", label: "Backlog" },
+    ...(sprints || []).filter((s) => s.project_id === form.project_id).map((s) => ({ value: s.sprint_id, label: s.name })),
+  ];
+
   const save = async () => {
     if (!form.title || !form.project_id) return;
     const payload = {
@@ -80,55 +85,41 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Project</Label>
-              <Select value={form.project_id} onValueChange={(v) => setForm({ ...form, project_id: v })}>
-                <SelectTrigger data-testid="task-project-select" className="mt-1.5"><SelectValue placeholder="Select project" /></SelectTrigger>
-                <SelectContent>{projects?.map((p) => <SelectItem key={p.project_id} value={p.project_id}>{p.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <Combobox value={form.project_id} onValueChange={(v) => setForm({ ...form, project_id: v, sprint_id: "" })}
+                placeholder="Select project"
+                options={(projects || []).map((p) => ({ value: p.project_id, label: p.name }))}
+                className="mt-1.5" data-testid="task-project-select" />
             </div>
             <div>
               <Label>Sprint</Label>
-              <Select value={form.sprint_id || "none"} onValueChange={(v) => setForm({ ...form, sprint_id: v === "none" ? "" : v })}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Backlog</SelectItem>
-                  {sprints?.map((s) => <SelectItem key={s.sprint_id} value={s.sprint_id}>{s.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Combobox value={form.sprint_id} onValueChange={(v) => setForm({ ...form, sprint_id: v })}
+                placeholder="Backlog" options={sprintOptions} className="mt-1.5" data-testid="task-sprint-select" />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div>
               <Label>Status</Label>
-              <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>{STATUS.map((s) => <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>)}</SelectContent>
-              </Select>
+              <Combobox value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}
+                options={STATUS.map((s) => ({ value: s.v, label: s.l }))} className="mt-1.5" />
             </div>
             <div>
               <Label>Priority</Label>
-              <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>{PRIORITY.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}</SelectContent>
-              </Select>
+              <Combobox value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}
+                options={PRIORITY.map((p) => ({ value: p, label: p[0].toUpperCase() + p.slice(1) }))} className="mt-1.5" />
             </div>
             <div>
               <Label>Type</Label>
-              <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>{TYPE.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}</SelectContent>
-              </Select>
+              <Combobox value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}
+                options={TYPE.map((t) => ({ value: t, label: t[0].toUpperCase() + t.slice(1) }))} className="mt-1.5" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Assignee</Label>
-              <Select value={form.assignee_id || "none"} onValueChange={(v) => setForm({ ...form, assignee_id: v === "none" ? "" : v })}>
-                <SelectTrigger className="mt-1.5"><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Unassigned</SelectItem>
-                  {members?.map((m) => <SelectItem key={m.user_id} value={m.user_id}>{m.name || m.email}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Combobox value={form.assignee_id} onValueChange={(v) => setForm({ ...form, assignee_id: v })}
+                placeholder="Unassigned"
+                options={[{ value: "", label: "Unassigned" }, ...(members || []).map((m) => ({ value: m.user_id, label: m.name || m.email }))]}
+                className="mt-1.5" />
             </div>
             <div>
               <Label>Estimate (hours)</Label>
@@ -148,15 +139,14 @@ export default function TaskDialog({ open, onOpenChange, task, projects, members
           {!task && (
             <div>
               <Label>Repeat</Label>
-              <Select value={form.repeat} onValueChange={(v) => setForm({ ...form, repeat: v })}>
-                <SelectTrigger className="mt-1.5" data-testid="task-repeat-select"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Does not repeat</SelectItem>
-                  <SelectItem value="daily">Daily</SelectItem>
-                  <SelectItem value="weekly">Weekly</SelectItem>
-                  <SelectItem value="monthly">Monthly</SelectItem>
-                </SelectContent>
-              </Select>
+              <Combobox value={form.repeat} onValueChange={(v) => setForm({ ...form, repeat: v })}
+                options={[
+                  { value: "none", label: "Does not repeat" },
+                  { value: "daily", label: "Daily" },
+                  { value: "weekly", label: "Weekly" },
+                  { value: "monthly", label: "Monthly" },
+                ]}
+                className="mt-1.5" data-testid="task-repeat-select" />
               {form.repeat !== "none" && (
                 <p className="text-xs text-slate-500 mt-1.5">A new task will be created automatically each {form.repeat === "daily" ? "day" : form.repeat === "weekly" ? "week" : "month"}, based on the start date.</p>
               )}
