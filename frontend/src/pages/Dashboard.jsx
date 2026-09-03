@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
+import InfoTip from "@/components/InfoTip";
 import { CheckCircle, Clock, ListChecks, TrendUp, CalendarBlank, FileCsv, FilePdf } from "@phosphor-icons/react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 import { exportCSV, exportPDF } from "@/lib/analyticsExport";
@@ -129,10 +130,14 @@ function DashboardBody({ data, trendLabel, chartsRef }) {
   const totalHours = (data.total_logged_minutes / 60).toFixed(1);
 
   const stats = [
-    { icon: ListChecks, label: "Total Tasks", value: data.total_tasks, tone: "text-slate-700 bg-slate-100" },
-    { icon: CheckCircle, label: "Completed", value: data.completed_tasks, tone: "text-emerald-700 bg-emerald-100" },
-    { icon: TrendUp, label: "Completion Rate", value: `${data.completion_rate.toFixed(0)}%`, tone: "text-indigo-700 bg-indigo-100" },
-    { icon: Clock, label: "Hours Logged", value: totalHours, tone: "text-orange-700 bg-orange-100" },
+    { icon: ListChecks, label: "Total Tasks", value: data.total_tasks, tone: "text-slate-700 bg-slate-100",
+      tip: "Total tasks in the workspace, across all projects and statuses." },
+    { icon: CheckCircle, label: "Completed", value: data.completed_tasks, tone: "text-emerald-700 bg-emerald-100",
+      tip: "Tasks currently marked as Done." },
+    { icon: TrendUp, label: "Completion Rate", value: `${data.completion_rate.toFixed(0)}%`, tone: "text-indigo-700 bg-indigo-100",
+      tip: "Completed ÷ total tasks, as a percentage." },
+    { icon: Clock, label: "Hours Logged", value: totalHours, tone: "text-orange-700 bg-orange-100",
+      tip: "Total time the team tracked on tasks, in hours." },
   ];
 
   return (
@@ -143,8 +148,10 @@ function DashboardBody({ data, trendLabel, chartsRef }) {
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${s.tone}`}>
               <s.icon size={20} weight="duotone" />
             </div>
-            <div className="mt-4 text-3xl font-display font-semibold tracking-tight">{s.value}</div>
-            <div className="text-sm text-slate-500 mt-1">{s.label}</div>
+            <InfoTip text={s.tip} className="block mt-4">
+              <div className="text-3xl font-display font-semibold tracking-tight">{s.value}</div>
+              <div className="text-sm text-slate-500 mt-1">{s.label}</div>
+            </InfoTip>
           </Card>
         ))}
       </div>

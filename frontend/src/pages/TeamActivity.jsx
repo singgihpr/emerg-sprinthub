@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import InfoTip from "@/components/InfoTip";
 import { ArrowsClockwise, Timer, ListChecks, Clock, Warning, WarningCircle } from "@phosphor-icons/react";
 
 function fmtMinutes(m) {
@@ -98,10 +99,10 @@ export default function TeamActivity() {
             <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-700 flex items-center justify-center">
               <Timer size={20} weight="duotone" />
             </div>
-            <div>
+            <InfoTip text="Teammates who currently have a running task timer." className="block">
               <div className="text-2xl font-display font-semibold">{activeTimers}</div>
               <div className="text-xs text-slate-500">Active timers now</div>
-            </div>
+            </InfoTip>
           </div>
         </Card>
         <Card className={`p-5 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)] ${idleAlerts > 0 ? "ring-2 ring-red-200" : ""}`} data-testid="idle-alerts-kpi">
@@ -109,10 +110,10 @@ export default function TeamActivity() {
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${idleAlerts > 0 ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}`}>
               <WarningCircle size={20} weight="duotone" />
             </div>
-            <div>
+            <InfoTip text="Running timers past 2 hours — usually a forgotten timer." className="block">
               <div className="text-2xl font-display font-semibold">{idleAlerts}</div>
               <div className="text-xs text-slate-500">Idle {'>'} 2h</div>
-            </div>
+            </InfoTip>
           </div>
         </Card>
         <Card className="p-5 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
@@ -120,10 +121,10 @@ export default function TeamActivity() {
             <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
               <ListChecks size={20} weight="duotone" />
             </div>
-            <div>
+            <InfoTip text="Tasks with status 'In Progress' across all teammates." className="block">
               <div className="text-2xl font-display font-semibold">{totalInProgress}</div>
               <div className="text-xs text-slate-500">Tasks in progress</div>
-            </div>
+            </InfoTip>
           </div>
         </Card>
         <Card className="p-5 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
@@ -131,10 +132,10 @@ export default function TeamActivity() {
             <div className="w-10 h-10 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center">
               <Clock size={20} weight="duotone" />
             </div>
-            <div>
+            <InfoTip text="Total time the whole team logged today." className="block">
               <div className="text-2xl font-display font-semibold">{fmtMinutes(totalLoggedToday)}</div>
               <div className="text-xs text-slate-500">Logged today (team)</div>
-            </div>
+            </InfoTip>
           </div>
         </Card>
       </div>
@@ -190,18 +191,18 @@ export default function TeamActivity() {
 
                 {/* Stats */}
                 <div className="flex items-center gap-6 text-sm">
-                  <div>
+                  <InfoTip text="Open tasks assigned to this person — anything not yet Done." className="block">
                     <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium">Active</div>
                     <div className="font-display font-semibold">{m.active_count}</div>
-                  </div>
-                  <div>
+                  </InfoTip>
+                  <InfoTip text="Time this person has logged today." className="block">
                     <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium">Today</div>
                     <div className="font-display font-semibold">{fmtMinutes(m.logged_today_minutes)}</div>
-                  </div>
-                  <div>
+                  </InfoTip>
+                  <InfoTip text="Time this person has logged over the last 7 days." className="block">
                     <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium">Week</div>
                     <div className="font-display font-semibold">{fmtMinutes(m.logged_week_minutes)}</div>
-                  </div>
+                  </InfoTip>
                 </div>
               </div>
 
@@ -230,7 +231,9 @@ export default function TeamActivity() {
                   <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium mb-2">Workload capacity</div>
                   <div className="flex items-center justify-between text-xs mb-1.5">
                     <span className="text-slate-500">{m.estimate_hours.toFixed(1)}h estimated / 40h</span>
-                    <span className={`font-semibold ${overloaded ? "text-orange-600" : "text-slate-700"}`}>{capacityPct.toFixed(0)}%</span>
+                    <InfoTip text="Estimated hours on this person's open tasks vs a 40-hour week. Over 100% means overloaded." className="font-semibold">
+                      <span className={overloaded ? "text-orange-600" : "text-slate-700"}>{capacityPct.toFixed(0)}%</span>
+                    </InfoTip>
                   </div>
                   <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div className={`h-full ${overloaded ? "bg-orange-500" : "bg-indigo-600"} transition-all`} style={{ width: `${capacityPct}%` }} />
