@@ -9,7 +9,7 @@ ENV REACT_APP_BACKEND_URL=$REACT_APP_BACKEND_URL \
     NODE_OPTIONS=--max-old-space-size=2048 \
     CI=false
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 COPY . .
