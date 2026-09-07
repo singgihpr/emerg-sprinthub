@@ -36,7 +36,7 @@ services:
         REACT_APP_BACKEND_URL: ""
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8030:80"
     depends_on:
       - backend
 
