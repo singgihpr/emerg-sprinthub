@@ -6,6 +6,7 @@ import { OrgProvider } from "@/context/OrgContext";
 import { Toaster } from "@/components/ui/sonner";
 import Login from "@/pages/Login";
 import AuthCallback from "@/pages/AuthCallback";
+import AcceptInvite from "@/pages/AcceptInvite";
 import AppShell from "@/components/AppShell";
 import Dashboard from "@/pages/Dashboard";
 import Tasks from "@/pages/Tasks";
@@ -29,6 +30,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/accept-invite/:token" element={<AcceptInvite />} />
       <Route
         path="/"
         element={

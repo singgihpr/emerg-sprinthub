@@ -6,19 +6,25 @@ load_dotenv(ROOT_DIR / '.env')
 import os
 import uuid
 import logging
+import asyncio
+import hashlib
+import secrets
+import smtplib
 import bcrypt
 import jwt
 import httpx
 from datetime import datetime, timezone, timedelta, date
 import calendar as _calendar
 from typing import List, Optional, Literal
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, BackgroundTasks
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 from PIL import Image
 from io import BytesIO
+from email.message import EmailMessage
+from email.utils import make_msgid
 import base64
 
 # ----------------------
@@ -148,6 +154,9 @@ class MemberInvite(BaseModel):
     email: EmailStr
     name: str
     role: str = "member"  # owner/admin/manager/member
+
+class InviteAccept(BaseModel):
+    password: str = Field(..., min_length=6, max_length=128)
 
 class ProjectCreate(BaseModel):
     name: str
@@ -312,6 +321,7 @@ async def google_session(request: Request, response: Response):
         user_doc = {
             "user_id": user_id, "email": email, "name": data.get("name", email),
             "picture": data.get("picture"), "password_hash": None,
+            "auth_provider": "google",
             "created_at": now_utc().isoformat()
         }
         await db.users.insert_one(user_doc)
@@ -327,7 +337,7 @@ async def google_session(request: Request, response: Response):
         })
     else:
         user_id = user["user_id"]
-        await db.users.update_one({"user_id": user_id}, {"$set": {"picture": data.get("picture"), "name": data.get("name", user.get("name"))}})
+        await db.users.update_one({"user_id": user_id}, {"$set": {"picture": data.get("picture"), "name": data.get("name", user.get("name")), "auth_provider": "google"}})
     # Store session
     session_token = data["session_token"]
     await db.user_sessions.insert_one({
@@ -448,28 +458,38 @@ async def list_members(org_id: str, user: dict = Depends(get_current_user)):
     await ensure_member(org_id, user["user_id"])
     members = await db.memberships.find({"org_id": org_id}, {"_id": 0}).to_list(500)
     user_ids = [m["user_id"] for m in members]
-    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "password_hash": 0}).to_list(500)
+    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0}).to_list(500)
     umap = {u["user_id"]: u for u in users}
     out = []
     for m in members:
         u = umap.get(m["user_id"], {})
-        out.append({**u, "role": m["role"], "membership_id": m["membership_id"]})
+        invited = not u.pop("password_hash", None) and u.get("auth_provider") != "google"
+        out.append({**u, "role": m["role"], "membership_id": m["membership_id"], "invited": invited})
     return out
 
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
 @api.post("/orgs/{org_id}/members")
-async def invite_member(org_id: str, body: MemberInvite, user: dict = Depends(get_current_user)):
+async def invite_member(org_id: str, body: MemberInvite, background: BackgroundTasks, user: dict = Depends(get_current_user)):
     m = await ensure_member(org_id, user["user_id"])
     if m["role"] not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     email = body.email.lower()
+    org = await db.organizations.find_one({"org_id": org_id}, {"_id": 0})
+    org_name = (org or {}).get("name") or EMAIL_FROM_NAME
     existing = await db.users.find_one({"email": email})
     if existing:
         target_id = existing["user_id"]
+        name = existing.get("name") or body.name
+        needs_password = not existing.get("password_hash") and existing.get("auth_provider") != "google"
     else:
         target_id = new_id("user")
+        name = body.name
+        needs_password = True
         await db.users.insert_one({
             "user_id": target_id, "email": email, "name": body.name,
-            "password_hash": hash_password("Welcome@123"), "picture": None,
+            "password_hash": None, "picture": None,
             "created_at": now_utc().isoformat()
         })
     already = await db.memberships.find_one({"org_id": org_id, "user_id": target_id})
@@ -479,7 +499,50 @@ async def invite_member(org_id: str, body: MemberInvite, user: dict = Depends(ge
         "membership_id": new_id("mem"), "org_id": org_id,
         "user_id": target_id, "role": body.role, "created_at": now_utc().isoformat()
     })
-    return {"ok": True, "user_id": target_id}
+    token = None
+    if needs_password:
+        token = secrets.token_urlsafe(32)
+        # Re-invite replaces the pending token for this org only; other orgs keep theirs.
+        await db.invites.delete_many({"org_id": org_id, "email": email})
+        await db.invites.insert_one({
+            "invite_id": new_id("inv"), "token_hash": _hash_token(token),
+            "org_id": org_id, "email": email, "name": name, "role": body.role,
+            "invited_by": user["user_id"], "created_at": now_utc().isoformat(),
+            "expires_at": now_utc() + timedelta(days=7),
+        })
+    if token and not APP_BASE_URL.startswith("https://"):
+        logger.error(f"APP_BASE_URL must be https:// to email invite links (got {APP_BASE_URL!r}); invite email skipped")
+    else:
+        subject, html = _invite_email(name=name, inviter_name=user.get("name") or user.get("email") or "An admin",
+                                      org_name=org_name, token=token)
+        background.add_task(send_email, to=email, subject=subject, html=html)
+    return {"ok": True, "user_id": target_id, "invited": needs_password}
+
+@api.get("/invites/{token}")
+async def get_invite(token: str):
+    inv = await db.invites.find_one({"token_hash": _hash_token(token)}, {"_id": 0, "token_hash": 0})
+    if not inv or inv["expires_at"].replace(tzinfo=timezone.utc) < now_utc():
+        raise HTTPException(status_code=404, detail="Invalid or expired invite")
+    org = await db.organizations.find_one({"org_id": inv["org_id"]}, {"_id": 0})
+    return {"email": inv["email"], "name": inv.get("name"),
+            "org_name": (org or {}).get("name", ""), "role": inv.get("role", "member")}
+
+@api.post("/invites/{token}/accept")
+async def accept_invite(token: str, body: InviteAccept, response: Response):
+    inv = await db.invites.find_one({"token_hash": _hash_token(token)}, {"_id": 0})
+    if not inv or inv["expires_at"].replace(tzinfo=timezone.utc) < now_utc():
+        raise HTTPException(status_code=404, detail="Invalid or expired invite")
+    deleted = await db.invites.delete_one({"invite_id": inv["invite_id"]})
+    if deleted.deleted_count == 0:  # already accepted concurrently — single use
+        raise HTTPException(status_code=404, detail="Invalid or expired invite")
+    await db.users.update_one({"email": inv["email"]}, {"$set": {"password_hash": hash_password(body.password)}})
+    u = await db.users.find_one({"email": inv["email"]}, {"_id": 0, "password_hash": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="Invited account no longer exists")
+    jwt_token = create_access_token(u["user_id"], u["email"])
+    set_auth_cookie(response, jwt_token)
+    return {"user_id": u["user_id"], "email": u["email"], "name": u.get("name"),
+            "picture": u.get("picture"), "token": jwt_token}
 
 # ----------------------
 # Projects
@@ -1125,6 +1188,15 @@ EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "SprintHub")
 
+# Real SMTP (e.g. Brevo: smtp-relay.brevo.com:587). Takes precedence over the
+# Emergent proxy above when SMTP_HOST is set. No creds = plain send (MailHog dev).
+SMTP_HOST = os.environ.get("SMTP_HOST")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER")
+SMTP_PASS = os.environ.get("SMTP_PASS")
+EMAIL_FROM = os.environ.get("EMAIL_FROM") or SMTP_USER or "no-reply@localhost"
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
+
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
 _CRED_ASK = ("reply with your password", "reply with the code", "send your password",
              "cvv", "send us your password", "enter your password below",
@@ -1190,11 +1262,38 @@ def _assert_safe_email(subject: str, html: str) -> None:
             if not _same_site(m.group(1).lower(), real):
                 raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
 
+def _smtp_send_blocking(msg: EmailMessage) -> None:
+    # ponytail: one blocking SMTP connection per send, off-loop via to_thread —
+    # fine at invite/digest volume. Swap to a queue/aiosmtplib if throughput matters.
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+        if SMTP_USER and SMTP_PASS:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+        s.send_message(msg)
+
 async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
-    if not EMAIL_KEY:
-        logger.warning("EMERGENT_EMAIL_KEY missing; skipping email send")
+    try:
+        _assert_safe_email(subject, html)
+    except ValueError as e:
+        logger.error(f"send_email blocked by content scan: {e}")
         return None
-    _assert_safe_email(subject, html)
+    if SMTP_HOST:
+        msg = EmailMessage()
+        msg["From"] = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg["Message-ID"] = make_msgid(domain=EMAIL_FROM.split("@")[-1])
+        msg.set_content(f"{subject}\n\nThis email requires an HTML-capable client.")
+        msg.add_alternative(html, subtype="html")
+        try:
+            await asyncio.to_thread(_smtp_send_blocking, msg)
+            return msg["Message-ID"]
+        except Exception as e:
+            logger.error(f"SMTP send failed: {e}")
+            return None
+    if not EMAIL_KEY:
+        logger.warning("No SMTP_HOST or EMERGENT_EMAIL_KEY configured; skipping email send")
+        return None
     payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
     try:
         async with httpx.AsyncClient(timeout=30) as hc:
@@ -1205,6 +1304,45 @@ async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"send_email failed: {e}")
         return None
+
+
+def _invite_email(*, name: str, inviter_name: str, org_name: str, token: Optional[str] = None) -> tuple:
+    """Build (subject, html) for member-invite / added-to-org emails.
+    token set => password-setup invite; None => plain notification."""
+    subject = f"{inviter_name} added you to {org_name} on {EMAIL_FROM_NAME}"
+    link = f"{APP_BASE_URL}/accept-invite/{token}" if token else APP_BASE_URL
+    # _assert_safe_email requires absolute https links — omit the button otherwise
+    button = ""
+    if link.startswith("https://"):
+        label = "Set password &amp; join" if token else f"Open {_esc(EMAIL_FROM_NAME)}"
+        button = (f'<p style="text-align:center;margin:28px 0"><a href="{_esc(link)}" '
+                  f'style="background:#4F46E5;color:#ffffff;text-decoration:none;padding:12px 28px;'
+                  f'border-radius:8px;font-size:15px;font-weight:600;display:inline-block">{label}</a></p>')
+    if token:
+        body_line = (f'<p style="color:#0F172A;font-size:15px">Hi {_esc(name or "there")}, '
+                     f'<strong>{_esc(inviter_name)}</strong> invited you to <strong>{_esc(org_name)}</strong>. '
+                     f'Set your password to get started — the link expires in 7 days.</p>')
+    else:
+        body_line = (f'<p style="color:#0F172A;font-size:15px">Hi {_esc(name or "there")}, '
+                     f'<strong>{_esc(inviter_name)}</strong> added you to <strong>{_esc(org_name)}</strong>.</p>')
+    html = f"""
+<table role="presentation" width="100%" style="background:#F8FAFC;padding:32px 0;font-family:Arial,sans-serif">
+  <tr><td align="center">
+    <table role="presentation" width="600" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,0.06)">
+      <tr><td style="padding:28px 32px;background:#4F46E5;color:#fff">
+        <div style="font-size:12px;letter-spacing:0.2em;text-transform:uppercase;opacity:0.8">{_esc(EMAIL_FROM_NAME)}</div>
+        <div style="font-size:24px;font-weight:600;margin-top:6px">{_esc(org_name)}</div>
+      </td></tr>
+      <tr><td style="padding:24px 32px">
+        {body_line}
+        {button}
+        <p style="font-size:12px;color:#94A3B8;margin-top:28px">Sent by {_esc(EMAIL_FROM_NAME)}. We never ask for your password by email.</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+"""
+    return subject, html
 
 
 # ----------------------
@@ -1365,6 +1503,8 @@ async def startup():
     await db.sprints.create_index("sprint_id", unique=True)
     await db.time_entries.create_index("entry_id", unique=True)
     await db.user_sessions.create_index("session_token", unique=True)
+    await db.invites.create_index("invite_id", unique=True)
+    await db.invites.create_index("expires_at", expireAfterSeconds=0)  # TTL: Mongo deletes expired invites
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "widiardhana@gmail.com")
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@1234")

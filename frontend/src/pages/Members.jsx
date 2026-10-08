@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { toast } from "sonner";
+import { api, formatApiErrorDetail } from "@/lib/api";
 import { useOrg } from "@/context/OrgContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,9 +29,14 @@ export default function Members() {
 
   const invite = async () => {
     if (!form.email || !form.name) return;
-    await api.post(`/orgs/${currentOrg.org_id}/members`, form);
-    setForm({ email: "", name: "", role: "member" });
-    setOpen(false); load();
+    try {
+      await api.post(`/orgs/${currentOrg.org_id}/members`, form);
+      toast.success(`Invite sent to ${form.email}`);
+      setForm({ email: "", name: "", role: "member" });
+      setOpen(false); load();
+    } catch (err) {
+      toast.error(formatApiErrorDetail(err.response?.data?.detail));
+    }
   };
 
   return (
@@ -69,7 +75,10 @@ export default function Members() {
                     </div>
                   </div>
                 </td>
-                <td className="px-6 py-4"><Badge variant="secondary" className="capitalize">{m.role}</Badge></td>
+                <td className="px-6 py-4">
+                  <Badge variant="secondary" className="capitalize">{m.role}</Badge>
+                  {m.invited && <Badge variant="outline" className="ml-2 text-amber-600 border-amber-300 bg-amber-50">Invited</Badge>}
+                </td>
                 <td className="px-6 py-4 text-slate-500 text-xs">{m.created_at?.slice(0, 10) || "—"}</td>
               </tr>
             ))}
@@ -88,7 +97,7 @@ export default function Members() {
                 options={ROLES.map((r) => ({ value: r, label: r[0].toUpperCase() + r.slice(1) }))}
                 className="mt-1.5" />
             </div>
-            <p className="text-xs text-slate-500">The new member gets default password <span className="font-mono">Welcome@123</span> if not registered yet.</p>
+            <p className="text-xs text-slate-500">We'll email them an invite link to set their password. Registered users are added instantly.</p>
             <Button className="w-full bg-indigo-600 hover:bg-indigo-700" onClick={invite} data-testid="invite-submit-btn">Add member</Button>
           </div>
         </DialogContent>

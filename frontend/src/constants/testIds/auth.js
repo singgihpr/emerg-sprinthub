@@ -31,3 +31,10 @@ export const REGISTER = {
 export const LOGOUT = {
 	button: 'logout-button',
 };
+
+export const INVITE = {
+	passwordInput: 'invite-password-input',
+	passwordConfirmInput: 'invite-password-confirm-input',
+	submitButton: 'invite-submit-button',
+	error: 'invite-error',
+};
