@@ -132,8 +132,10 @@ CREATE TABLE invites (
     invite_id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL REFERENCES organizations(org_id) ON DELETE CASCADE,
     email CITEXT NOT NULL,
+    name TEXT,
     token_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'member',
+    invited_by TEXT REFERENCES users(user_id),
     expires_at TIMESTAMPTZ NOT NULL,
     used BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

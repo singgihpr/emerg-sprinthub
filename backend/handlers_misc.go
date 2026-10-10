@@ -29,7 +29,7 @@ func teamActivity(c echo.Context) error {
 	}
 	ctx := c.Request().Context()
 
-	memberships, err := findMany(ctx, colMembers, bson.M{"org_id": orgID}, bson.M{"_id": 0}, nil, 500)
+	memberships, err := pgFindMany(ctx, "memberships", map[string]any{"org_id": orgID}, nil, "created_at", 500)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -37,13 +37,19 @@ func teamActivity(c echo.Context) error {
 	for _, x := range memberships {
 		userIDs = append(userIDs, asStr(x["user_id"]))
 	}
-	users, err := findMany(ctx, colUsers, bson.M{"user_id": bson.M{"$in": userIDs}}, bson.M{"_id": 0, "password_hash": 0}, nil, 500)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
-	}
-	umap := bson.M{}
-	for _, u := range users {
-		umap[asStr(u["user_id"])] = u
+	umap := map[string]bson.M{}
+	for _, uid := range userIDs {
+		u, err := pgFindOne(ctx, "users", map[string]any{"user_id": uid}, []string{"user_id", "email", "name", "picture", "created_at"})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		if u != nil {
+			bm := bson.M{}
+			for k, v := range u {
+				bm[k] = v
+			}
+			umap[uid] = bm
+		}
 	}
 	roleMap := bson.M{}
 	for _, x := range memberships {
@@ -88,7 +94,7 @@ func teamActivity(c echo.Context) error {
 
 	rows := make([]bson.M, 0, len(userIDs))
 	for _, uid := range userIDs {
-		u, _ := umap[uid].(bson.M)
+		u := umap[uid]
 		if u == nil {
 			u = bson.M{}
 		}
@@ -338,16 +344,22 @@ func listComments(c echo.Context) error {
 			authorIDs = append(authorIDs, aid)
 		}
 	}
-	authors, err := findMany(ctx, colUsers, bson.M{"user_id": bson.M{"$in": authorIDs}}, bson.M{"_id": 0, "password_hash": 0}, nil, 500)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
-	}
-	amap := bson.M{}
-	for _, a := range authors {
-		amap[asStr(a["user_id"])] = a
+	amap := map[string]bson.M{}
+	for _, aid := range authorIDs {
+		a, err := pgFindOne(ctx, "users", map[string]any{"user_id": aid}, []string{"user_id", "email", "name", "picture", "created_at"})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		if a != nil {
+			bm := bson.M{}
+			for k, v := range a {
+				bm[k] = v
+			}
+			amap[aid] = bm
+		}
 	}
 	for _, cm := range comments {
-		a, _ := amap[asStr(cm["author_id"])].(bson.M)
+		a := amap[asStr(cm["author_id"])]
 		if a == nil {
 			a = bson.M{}
 		}
@@ -386,12 +398,12 @@ func createComment(c echo.Context) error {
 		}
 	}
 	mentionedUsers := []string{}
-	if len(mentions) > 0 {
-		found, err := findMany(ctx, colUsers, bson.M{"email": bson.M{"$in": mentions}}, bson.M{"_id": 0, "password_hash": 0}, nil, 100)
+	for _, email := range mentions {
+		u, err := pgFindOne(ctx, "users", map[string]any{"email": email}, []string{"user_id"})
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 		}
-		for _, u := range found {
+		if u != nil {
 			mentionedUsers = append(mentionedUsers, asStr(u["user_id"]))
 		}
 	}

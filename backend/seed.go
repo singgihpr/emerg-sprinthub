@@ -59,23 +59,23 @@ func seed(ctx context.Context) {
 	if adminPassword == "" {
 		adminPassword = "Admin@1234"
 	}
-	existing, err := findOne(ctx, colUsers, bson.M{"email": adminEmail}, nil)
+	existing, err := pgPoolFindOne(ctx, "users", map[string]any{"email": adminEmail})
 	if err != nil {
 		log.Fatalf("seed lookup failed: %v", err)
 	}
 	if existing == nil {
 		userID := newID("user")
-		_ = insertDoc(ctx, colUsers, bson.M{
+		_ = pgPoolInsert(ctx, "users", map[string]any{
 			"user_id": userID, "email": adminEmail, "name": "Admin",
 			"password_hash": hashPassword(adminPassword), "picture": nil,
 			"created_at": isoNow(),
 		})
 		orgID := newID("org")
-		_ = insertDoc(ctx, colOrgs, bson.M{
+		_ = pgPoolInsert(ctx, "organizations", map[string]any{
 			"org_id": orgID, "name": "Acme Corp",
 			"owner_id": userID, "logo": nil, "created_at": isoNow(),
 		})
-		_ = insertDoc(ctx, colMembers, bson.M{
+		_ = pgPoolInsert(ctx, "memberships", map[string]any{
 			"membership_id": newID("mem"), "org_id": orgID,
 			"user_id": userID, "role": "owner", "created_at": isoNow(),
 		})
@@ -135,8 +135,8 @@ func seed(ctx context.Context) {
 		}
 	} else if !verifyPassword(adminPassword, asStr(existing["password_hash"])) {
 		// update password to match .env
-		_, _ = colUsers.UpdateOne(ctx, bson.M{"email": adminEmail},
-			bson.M{"$set": bson.M{"password_hash": hashPassword(adminPassword)}})
+		_ = pgPoolUpdate(ctx, "users", map[string]any{"email": adminEmail},
+			map[string]any{"password_hash": hashPassword(adminPassword)})
 	}
 	backfill(ctx)
 	log.Println("Startup complete")

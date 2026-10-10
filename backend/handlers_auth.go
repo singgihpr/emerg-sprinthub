@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 func register(c echo.Context) error {
@@ -18,7 +17,7 @@ func register(c echo.Context) error {
 	}
 	ctx := c.Request().Context()
 	email := strings.ToLower(b.Email)
-	existing, err := findOne(ctx, colUsers, bson.M{"email": email}, nil)
+	existing, err := pgFindOne(ctx, "users", map[string]any{"email": email}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -26,27 +25,27 @@ func register(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Email already registered")
 	}
 	userID := newID("user")
-	user := bson.M{
+	user := map[string]any{
 		"user_id": userID, "email": email, "name": b.Name,
 		"password_hash": hashPassword(b.Password), "picture": nil,
 		"created_at": isoNow(),
 	}
-	if err := insertDoc(ctx, colUsers, user); err != nil {
+	if err := pgInsert(ctx, "users", user); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	orgID := newID("org")
-	_ = insertDoc(ctx, colOrgs, bson.M{
+	_ = pgInsert(ctx, "organizations", map[string]any{
 		"org_id": orgID, "name": b.Name + "'s Workspace",
 		"owner_id": userID, "logo": nil, "created_at": isoNow(),
 	})
-	_ = insertDoc(ctx, colMembers, bson.M{
+	_ = pgInsert(ctx, "memberships", map[string]any{
 		"membership_id": newID("mem"), "org_id": orgID,
 		"user_id": userID, "role": "owner", "created_at": isoNow(),
 	})
 	token := createAccessToken(userID, email)
 	setAuthCookie(c, token)
 	setRefreshCookie(c, issueRefreshToken(ctx, userID))
-	return c.JSON(http.StatusOK, bson.M{"user_id": userID, "email": email, "name": b.Name, "token": token})
+	return c.JSON(http.StatusOK, map[string]any{"user_id": userID, "email": email, "name": b.Name, "token": token})
 }
 
 func login(c echo.Context) error {
@@ -59,7 +58,7 @@ func login(c echo.Context) error {
 	}
 	ctx := c.Request().Context()
 	email := strings.ToLower(b.Email)
-	user, err := findOne(ctx, colUsers, bson.M{"email": email}, nil)
+	user, err := pgFindOne(ctx, "users", map[string]any{"email": email}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -69,7 +68,7 @@ func login(c echo.Context) error {
 	token := createAccessToken(asStr(user["user_id"]), email)
 	setAuthCookie(c, token)
 	setRefreshCookie(c, issueRefreshToken(ctx, asStr(user["user_id"])))
-	return c.JSON(http.StatusOK, bson.M{
+	return c.JSON(http.StatusOK, map[string]any{
 		"user_id": user["user_id"], "email": email,
 		"name": user["name"], "picture": user["picture"], "token": token,
 	})
@@ -98,7 +97,7 @@ func refresh(c echo.Context) error {
 		clearRefreshCookie(c)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
-	user, err := findOne(ctx, colUsers, bson.M{"user_id": userID}, bson.M{"_id": 0, "password_hash": 0})
+	user, err := pgFindOne(ctx, "users", map[string]any{"user_id": userID}, []string{"user_id", "email", "name", "picture", "created_at"})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -108,7 +107,7 @@ func refresh(c echo.Context) error {
 	token := createAccessToken(userID, asStr(user["email"]))
 	setAuthCookie(c, token)
 	setRefreshCookie(c, issueRefreshToken(ctx, userID))
-	return c.JSON(http.StatusOK, bson.M{
+	return c.JSON(http.StatusOK, map[string]any{
 		"user_id": user["user_id"], "email": user["email"],
 		"name": user["name"], "picture": user["picture"], "token": token,
 	})
@@ -121,7 +120,7 @@ func logout(c echo.Context) error {
 	}
 	clearAuthCookie(c)
 	clearRefreshCookie(c)
-	return c.JSON(http.StatusOK, bson.M{"ok": true})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
 func me(c echo.Context) error {
@@ -141,7 +140,7 @@ func updateProfile(c echo.Context) error {
 	if err := bindBody(c, &b); err != nil {
 		return err
 	}
-	updates := bson.M{}
+	updates := map[string]any{}
 	if b.Name != nil {
 		updates["name"] = *b.Name
 	}
@@ -152,10 +151,10 @@ func updateProfile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "No fields to update")
 	}
 	ctx := c.Request().Context()
-	if _, err := colUsers.UpdateOne(ctx, bson.M{"user_id": user["user_id"]}, bson.M{"$set": updates}); err != nil {
+	if err := pgUpdate(ctx, "users", map[string]any{"user_id": user["user_id"]}, updates); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	updated, err := findOne(ctx, colUsers, bson.M{"user_id": user["user_id"]}, bson.M{"_id": 0, "password_hash": 0})
+	updated, err := pgFindOne(ctx, "users", map[string]any{"user_id": user["user_id"]}, []string{"user_id", "email", "name", "picture", "created_at"})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -175,7 +174,7 @@ func changePassword(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
 	ctx := c.Request().Context()
-	u, err := findOne(ctx, colUsers, bson.M{"user_id": user["user_id"]}, nil)
+	u, err := pgFindOne(ctx, "users", map[string]any{"user_id": user["user_id"]}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -187,8 +186,8 @@ func changePassword(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "Current password is incorrect")
 		}
 	}
-	if _, err := colUsers.UpdateOne(ctx, bson.M{"user_id": user["user_id"]},
-		bson.M{"$set": bson.M{"password_hash": hashPassword(b.NewPassword)}}); err != nil {
+	if err := pgUpdate(ctx, "users", map[string]any{"user_id": user["user_id"]},
+		map[string]any{"password_hash": hashPassword(b.NewPassword)}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	// revoke every session, then reissue for this one so the user stays logged in
@@ -196,5 +195,5 @@ func changePassword(c echo.Context) error {
 	token := createAccessToken(asStr(user["user_id"]), asStr(user["email"]))
 	setAuthCookie(c, token)
 	setRefreshCookie(c, issueRefreshToken(ctx, asStr(user["user_id"])))
-	return c.JSON(http.StatusOK, bson.M{"ok": true, "token": token})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "token": token})
 }

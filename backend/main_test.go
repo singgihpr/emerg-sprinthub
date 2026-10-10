@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 var testSrv *httptest.Server
@@ -26,7 +25,8 @@ var testSrv *httptest.Server
 func TestMain(m *testing.M) {
 	cfg = config{
 		MongoURL: "mongodb://127.0.0.1:27017", DBName: "sprinthub_gotest",
-		JWTSecret: "test-secret", EmailFromName: "SprintHub",
+		DatabaseURL: getTestDatabaseURL(),
+		JWTSecret:   "test-secret", EmailFromName: "SprintHub",
 		EmailFrom: "no-reply@localhost",
 		AllowedOrigins: []string{"http://localhost:3000"},
 		RateLimitOff:   true,
@@ -42,11 +42,31 @@ func TestMain(m *testing.M) {
 		fmt.Println("indexes failed:", err)
 		os.Exit(1)
 	}
+	if err := connectPostgres(ctx, cfg.DatabaseURL); err != nil {
+		fmt.Println("postgres required for tests:", err)
+		os.Exit(1)
+	}
+	if _, err := pgPool.Exec(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"); err != nil {
+		fmt.Println("postgres reset failed:", err)
+		os.Exit(1)
+	}
+	if err := runMigrations(ctx, pgPool); err != nil {
+		fmt.Println("postgres migrations failed:", err)
+		os.Exit(1)
+	}
 	testSrv = httptest.NewServer(newApp())
 	code := m.Run()
 	testSrv.Close()
 	_ = db.Drop(mongoCtx())
+	closePostgres()
 	os.Exit(code)
+}
+
+func getTestDatabaseURL() string {
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	return "postgres://sprinthub:sprinthub@127.0.0.1:5432/sprinthub?sslmode=disable"
 }
 
 func req(t *testing.T, method, path, token string, body interface{}) (int, map[string]interface{}) {
@@ -363,9 +383,9 @@ func TestInviteAcceptFlow(t *testing.T) {
 	if code != 200 || inv["invited"] != true {
 		t.Fatalf("invite new user: %d %v", code, inv)
 	}
-	// fetch the raw token from db (hash stored in mongo) to accept the invite
-	var doc bson.M
-	if err := colInvites.FindOne(mongoCtx(), bson.M{"email": "newbie@test.dev"}).Decode(&doc); err != nil {
+	// verify the invite was stored in postgres
+	invDoc, err := pgPoolFindOne(mongoCtx(), "invites", map[string]any{"email": "newbie@test.dev"})
+	if err != nil || invDoc == nil {
 		t.Fatalf("invite not stored: %v", err)
 	}
 	// reconstruct: we cannot reverse the hash — exercise expiry/404 paths instead

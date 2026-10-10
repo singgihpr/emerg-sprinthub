@@ -12,7 +12,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 var jwtSecret []byte
@@ -51,29 +50,30 @@ func newRefreshSecret() string {
 
 func issueRefreshToken(ctx context.Context, userID string) string {
 	raw := newRefreshSecret()
-	_ = insertDoc(ctx, colRefresh, bson.M{
+	_ = pgInsert(ctx, "refresh_tokens", map[string]any{
 		"token_hash": hashRefreshToken(raw), "user_id": userID,
 		"expires_at": nowUTC().Add(refreshTokenTTL), "created_at": nowUTC(),
 	})
 	return raw
 }
 
-// consumeRefreshToken atomically deletes the token (rotation): a replayed
-// token is gone after the first use. Returns the user id, "" if invalid.
+// consumeRefreshToken deletes the token (rotation): a replayed token is gone
+// after the first use. Returns the user id, "" if invalid.
 func consumeRefreshToken(ctx context.Context, raw string) string {
-	var doc bson.M
-	err := colRefresh.FindOneAndDelete(ctx, bson.M{"token_hash": hashRefreshToken(raw)}).Decode(&doc)
-	if err != nil {
+	tok := hashRefreshToken(raw)
+	doc, err := pgFindOne(ctx, "refresh_tokens", map[string]any{"token_hash": tok}, nil)
+	if err != nil || doc == nil {
 		return ""
 	}
 	if nowUTC().After(expiryTime(doc["expires_at"])) {
 		return ""
 	}
+	_ = pgDelete(ctx, "refresh_tokens", map[string]any{"token_hash": tok})
 	return asStr(doc["user_id"])
 }
 
 func revokeAllRefreshTokens(ctx context.Context, userID string) {
-	_, _ = colRefresh.DeleteMany(ctx, bson.M{"user_id": userID})
+	_ = pgDelete(ctx, "refresh_tokens", map[string]any{"user_id": userID})
 }
 
 const refreshCookiePath = "/api/auth"
@@ -93,7 +93,7 @@ func clearRefreshCookie(c echo.Context) {
 }
 
 // currentUser mirrors python's get_current_user: cookie first, then Bearer.
-func currentUser(c echo.Context) (bson.M, *echo.HTTPError) {
+func currentUser(c echo.Context) (map[string]any, *echo.HTTPError) {
 	req := c.Request()
 	token := ""
 	if ck, err := req.Cookie("access_token"); err == nil {
@@ -120,7 +120,7 @@ func currentUser(c echo.Context) (bson.M, *echo.HTTPError) {
 		return nil, echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
 	}
 	sub, _ := claims["sub"].(string)
-	user, err := findOne(req.Context(), colUsers, bson.M{"user_id": sub}, bson.M{"_id": 0, "password_hash": 0})
+	user, err := pgFindOne(req.Context(), "users", map[string]any{"user_id": sub}, []string{"user_id", "email", "name", "picture", "created_at"})
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -144,8 +144,8 @@ func clearAuthCookie(c echo.Context) {
 	})
 }
 
-func ensureMember(c echo.Context, orgID, userID string) (bson.M, *echo.HTTPError) {
-	m, err := findOne(c.Request().Context(), colMembers, bson.M{"org_id": orgID, "user_id": userID}, bson.M{"_id": 0})
+func ensureMember(c echo.Context, orgID, userID string) (map[string]any, *echo.HTTPError) {
+	m, err := pgFindOne(c.Request().Context(), "memberships", map[string]any{"org_id": orgID, "user_id": userID}, nil)
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -155,7 +155,7 @@ func ensureMember(c echo.Context, orgID, userID string) (bson.M, *echo.HTTPError
 	return m, nil
 }
 
-func roleIs(m bson.M, roles ...string) bool {
+func roleIs(m map[string]any, roles ...string) bool {
 	r := asStr(m["role"])
 	for _, want := range roles {
 		if r == want {

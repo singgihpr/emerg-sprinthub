@@ -247,17 +247,23 @@ func listProjectMembers(c echo.Context) error {
 	for _, m := range members {
 		userIDs = append(userIDs, asStr(m["user_id"]))
 	}
-	users, err := findMany(ctx, colUsers, bson.M{"user_id": bson.M{"$in": userIDs}}, bson.M{"_id": 0, "password_hash": 0}, nil, 500)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
-	}
-	umap := bson.M{}
-	for _, u := range users {
-		umap[asStr(u["user_id"])] = u
+	umap := map[string]bson.M{}
+	for _, uid := range userIDs {
+		u, err := pgFindOne(ctx, "users", map[string]any{"user_id": uid}, []string{"user_id", "email", "name", "picture", "created_at"})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		if u != nil {
+			bm := bson.M{}
+			for k, v := range u {
+				bm[k] = v
+			}
+			umap[uid] = bm
+		}
 	}
 	out := make([]bson.M, 0, len(members))
 	for _, m := range members {
-		u, _ := umap[asStr(m["user_id"])].(bson.M)
+		u := umap[asStr(m["user_id"])]
 		if u == nil {
 			u = bson.M{}
 		}
@@ -295,7 +301,7 @@ func addProjectMember(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
 	ctx := c.Request().Context()
-	target, err := findOne(ctx, colMembers, bson.M{"org_id": orgID, "user_id": b.UserID}, nil)
+	target, err := pgFindOne(ctx, "memberships", map[string]any{"org_id": orgID, "user_id": b.UserID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}

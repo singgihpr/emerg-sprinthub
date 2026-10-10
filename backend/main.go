@@ -122,6 +122,7 @@ func newApp() *echo.Echo {
 	e.Use(middleware.Recover())
 	e.Use(corsMiddleware)
 	e.Use(authRateLimit)
+	e.Use(pgTxMiddleware)
 
 	e.GET("/healthz", func(c echo.Context) error { return c.JSON(http.StatusOK, bson.M{"ok": true}) })
 

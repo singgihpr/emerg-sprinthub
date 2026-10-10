@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 	"golang.org/x/image/draw"
 )
 
@@ -27,18 +27,37 @@ func listOrgs(c echo.Context) error {
 		return herr
 	}
 	ctx := c.Request().Context()
-	memberships, err := findMany(ctx, colMembers, bson.M{"user_id": user["user_id"]}, bson.M{"_id": 0}, nil, 500)
+	memberships, err := pgFindMany(ctx, "memberships", map[string]any{"user_id": user["user_id"]}, nil, "created_at", 500)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	orgIDs := make([]string, 0, len(memberships))
-	roleMap := bson.M{}
+	roleMap := map[string]any{}
 	for _, m := range memberships {
 		orgIDs = append(orgIDs, asStr(m["org_id"]))
 		roleMap[asStr(m["org_id"])] = m["role"]
 	}
-	orgs, err := findMany(ctx, colOrgs, bson.M{"org_id": bson.M{"$in": orgIDs}}, bson.M{"_id": 0},
-		bson.D{{Key: "created_at", Value: 1}}, 500)
+	if len(orgIDs) == 0 {
+		return c.JSON(http.StatusOK, []map[string]any{})
+	}
+	// Custom IN query because the minimal helper only does equality.
+	placeholders := make([]string, len(orgIDs))
+	args := make([]any, len(orgIDs))
+	for i, id := range orgIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	q := fmt.Sprintf("SELECT * FROM organizations WHERE org_id IN (%s) ORDER BY created_at",
+		strings.Join(placeholders, ", "))
+	rows, err := pgTxFromContext(ctx)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	res, err := rows.Query(ctx, q, args...)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	orgs, err := scanRowsToMaps(res)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -62,14 +81,14 @@ func createOrg(c echo.Context) error {
 	}
 	ctx := c.Request().Context()
 	orgID := newID("org")
-	doc := bson.M{
+	doc := map[string]any{
 		"org_id": orgID, "name": b.Name, "owner_id": user["user_id"],
 		"logo": b.Logo, "created_at": isoNow(),
 	}
-	if err := insertDoc(ctx, colOrgs, doc); err != nil {
+	if err := pgInsert(ctx, "organizations", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	_ = insertDoc(ctx, colMembers, bson.M{
+	_ = pgInsert(ctx, "memberships", map[string]any{
 		"membership_id": newID("mem"), "org_id": orgID,
 		"user_id": user["user_id"], "role": "owner", "created_at": isoNow(),
 	})
@@ -94,7 +113,7 @@ func updateOrg(c echo.Context) error {
 	if err := bindBody(c, &b); err != nil {
 		return err
 	}
-	updates := bson.M{}
+	updates := map[string]any{}
 	if b.Name != nil {
 		updates["name"] = *b.Name
 	}
@@ -105,16 +124,15 @@ func updateOrg(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "No fields to update")
 	}
 	ctx := c.Request().Context()
-	res, err := colOrgs.UpdateOne(ctx, bson.M{"org_id": orgID}, bson.M{"$set": updates})
+	if err := pgUpdate(ctx, "organizations", map[string]any{"org_id": orgID}, updates); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	org, err := pgFindOne(ctx, "organizations", map[string]any{"org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	if res.MatchedCount == 0 {
+	if org == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
-	}
-	org, err := findOne(ctx, colOrgs, bson.M{"org_id": orgID}, bson.M{"_id": 0})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	org["role"] = m["role"]
 	return c.JSON(http.StatusOK, org)
@@ -191,16 +209,15 @@ func uploadOrgLogo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid image file")
 	}
 	ctx := c.Request().Context()
-	res, err := colOrgs.UpdateOne(ctx, bson.M{"org_id": orgID}, bson.M{"$set": bson.M{"logo": dataURL}})
+	if err := pgUpdate(ctx, "organizations", map[string]any{"org_id": orgID}, map[string]any{"logo": dataURL}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	org, err := pgFindOne(ctx, "organizations", map[string]any{"org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	if res.MatchedCount == 0 {
+	if org == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
-	}
-	org, err := findOne(ctx, colOrgs, bson.M{"org_id": orgID}, bson.M{"_id": 0})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	org["role"] = m["role"]
 	return c.JSON(http.StatusOK, org)
@@ -218,7 +235,7 @@ func listMembers(c echo.Context) error {
 		return herr
 	}
 	ctx := c.Request().Context()
-	members, err := findMany(ctx, colMembers, bson.M{"org_id": orgID}, bson.M{"_id": 0}, nil, 500)
+	members, err := pgFindMany(ctx, "memberships", map[string]any{"org_id": orgID}, nil, "created_at", 500)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -226,24 +243,26 @@ func listMembers(c echo.Context) error {
 	for _, m := range members {
 		userIDs = append(userIDs, asStr(m["user_id"]))
 	}
-	users, err := findMany(ctx, colUsers, bson.M{"user_id": bson.M{"$in": userIDs}}, bson.M{"_id": 0}, nil, 500)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	umap := map[string]map[string]any{}
+	for _, uid := range userIDs {
+		u, err := pgFindOne(ctx, "users", map[string]any{"user_id": uid}, nil)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		if u != nil {
+			umap[uid] = u
+		}
 	}
-	umap := bson.M{}
-	for _, u := range users {
-		umap[asStr(u["user_id"])] = u
-	}
-	out := make([]bson.M, 0, len(members))
+	out := make([]map[string]any, 0, len(members))
 	for _, m := range members {
-		u, _ := umap[asStr(m["user_id"])].(bson.M)
+		u := umap[asStr(m["user_id"])]
 		if u == nil {
-			u = bson.M{}
+			u = map[string]any{}
 		}
 		ph := asStr(u["password_hash"])
 		invited := ph == "" && asStr(u["auth_provider"]) != "google"
 		delete(u, "password_hash")
-		row := bson.M{}
+		row := map[string]any{}
 		for k, v := range u {
 			row[k] = v
 		}
@@ -288,7 +307,7 @@ func inviteMember(c echo.Context) error {
 	}
 	ctx := c.Request().Context()
 	email := strings.ToLower(b.Email)
-	org, err := findOne(ctx, colOrgs, bson.M{"org_id": orgID}, bson.M{"_id": 0})
+	org, err := pgFindOne(ctx, "organizations", map[string]any{"org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -298,7 +317,7 @@ func inviteMember(c echo.Context) error {
 	}
 	var targetID, name string
 	needsPassword := true
-	existing, err := findOne(ctx, colUsers, bson.M{"email": email}, nil)
+	existing, err := pgFindOne(ctx, "users", map[string]any{"email": email}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -309,12 +328,12 @@ func inviteMember(c echo.Context) error {
 	} else {
 		targetID = newID("user")
 		name = b.Name
-		_ = insertDoc(ctx, colUsers, bson.M{
+		_ = pgInsert(ctx, "users", map[string]any{
 			"user_id": targetID, "email": email, "name": b.Name,
 			"password_hash": nil, "picture": nil, "created_at": isoNow(),
 		})
 	}
-	already, err := findOne(ctx, colMembers, bson.M{"org_id": orgID, "user_id": targetID}, nil)
+	already, err := pgFindOne(ctx, "memberships", map[string]any{"org_id": orgID, "user_id": targetID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -325,7 +344,7 @@ func inviteMember(c echo.Context) error {
 	if role == "" {
 		role = "member"
 	}
-	_ = insertDoc(ctx, colMembers, bson.M{
+	_ = pgInsert(ctx, "memberships", map[string]any{
 		"membership_id": newID("mem"), "org_id": orgID,
 		"user_id": targetID, "role": role, "created_at": isoNow(),
 	})
@@ -333,10 +352,10 @@ func inviteMember(c echo.Context) error {
 	if needsPassword {
 		token = urlsafeToken()
 		// Re-invite replaces the pending token for this org only; other orgs keep theirs.
-		if _, err := colInvites.DeleteMany(ctx, bson.M{"org_id": orgID, "email": email}); err != nil {
+		if err := pgDelete(ctx, "invites", map[string]any{"org_id": orgID, "email": email}); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 		}
-		_ = insertDoc(ctx, colInvites, bson.M{
+		_ = pgInsert(ctx, "invites", map[string]any{
 			"invite_id": newID("inv"), "token_hash": hashToken(token),
 			"org_id": orgID, "email": email, "name": name, "role": role,
 			"invited_by": user["user_id"], "created_at": isoNow(),
@@ -350,20 +369,20 @@ func inviteMember(c echo.Context) error {
 		subject, htmlBody := inviteEmail(name, inviter, orgName, token)
 		go func(to, subject, html string) { _, _ = sendEmail(to, subject, html) }(email, subject, htmlBody)
 	}
-	return c.JSON(http.StatusOK, bson.M{"ok": true, "user_id": targetID, "invited": needsPassword})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "user_id": targetID, "invited": needsPassword})
 }
 
 func getInvite(c echo.Context) error {
 	token := c.Param("token")
 	ctx := c.Request().Context()
-	inv, err := findOne(ctx, colInvites, bson.M{"token_hash": hashToken(token)}, bson.M{"_id": 0, "token_hash": 0})
+	inv, err := pgFindOne(ctx, "invites", map[string]any{"token_hash": hashToken(token)}, []string{"invite_id", "org_id", "email", "name", "role", "expires_at"})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	if inv == nil || expiryTime(inv["expires_at"]).Before(nowUTC()) {
 		return echo.NewHTTPError(http.StatusNotFound, "Invalid or expired invite")
 	}
-	org, err := findOne(ctx, colOrgs, bson.M{"org_id": inv["org_id"]}, bson.M{"_id": 0})
+	org, err := pgFindOne(ctx, "organizations", map[string]any{"org_id": inv["org_id"]}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -372,7 +391,7 @@ func getInvite(c echo.Context) error {
 		orgName = asStr(org["name"])
 	}
 	role := bsonStr(inv, "role", "member")
-	return c.JSON(http.StatusOK, bson.M{
+	return c.JSON(http.StatusOK, map[string]any{
 		"email": inv["email"], "name": inv["name"],
 		"org_name": orgName, "role": role,
 	})
@@ -388,25 +407,21 @@ func acceptInvite(c echo.Context) error {
 	}
 	token := c.Param("token")
 	ctx := c.Request().Context()
-	inv, err := findOne(ctx, colInvites, bson.M{"token_hash": hashToken(token)}, bson.M{"_id": 0})
+	inv, err := pgFindOne(ctx, "invites", map[string]any{"token_hash": hashToken(token)}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	if inv == nil || expiryTime(inv["expires_at"]).Before(nowUTC()) {
 		return echo.NewHTTPError(http.StatusNotFound, "Invalid or expired invite")
 	}
-	deleted, err := colInvites.DeleteOne(ctx, bson.M{"invite_id": inv["invite_id"]})
-	if err != nil {
+	if err := pgDelete(ctx, "invites", map[string]any{"invite_id": inv["invite_id"]}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	if deleted.DeletedCount == 0 { // already accepted concurrently — single use
-		return echo.NewHTTPError(http.StatusNotFound, "Invalid or expired invite")
-	}
-	if _, err := colUsers.UpdateOne(ctx, bson.M{"email": inv["email"]},
-		bson.M{"$set": bson.M{"password_hash": hashPassword(b.Password)}}); err != nil {
+	if err := pgUpdate(ctx, "users", map[string]any{"email": inv["email"]},
+		map[string]any{"password_hash": hashPassword(b.Password)}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	u, err := findOne(ctx, colUsers, bson.M{"email": inv["email"]}, bson.M{"_id": 0, "password_hash": 0})
+	u, err := pgFindOne(ctx, "users", map[string]any{"email": inv["email"]}, []string{"user_id", "email", "name", "picture", "created_at"})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -415,7 +430,7 @@ func acceptInvite(c echo.Context) error {
 	}
 	jwtToken := createAccessToken(asStr(u["user_id"]), asStr(u["email"]))
 	setAuthCookie(c, jwtToken)
-	return c.JSON(http.StatusOK, bson.M{
+	return c.JSON(http.StatusOK, map[string]any{
 		"user_id": u["user_id"], "email": u["email"], "name": u["name"],
 		"picture": u["picture"], "token": jwtToken,
 	})
