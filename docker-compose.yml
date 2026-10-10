@@ -1,4 +1,5 @@
 services:
+  # ponytail: Mongo is being phased out in P1. Postgres below is the target.
   mongo:
     image: mongo:7
     restart: unless-stopped
@@ -13,14 +14,32 @@ services:
     # network. Add MONGO_INITDB_ROOT_* + publish 127.0.0.1:27017 if you need
     # host access.
 
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sprinthub
+      POSTGRES_PASSWORD: sprinthub
+      POSTGRES_DB: sprinthub
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprinthub -d sprinthub"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build: ./backend
     restart: unless-stopped
     env_file: .env
     environment:
       MONGO_URL: mongodb://mongo:27017
+      DATABASE_URL: postgres://sprinthub:sprinthub@postgres:5432/sprinthub?sslmode=disable
     depends_on:
       mongo:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8000/healthz"]
@@ -42,3 +61,4 @@ services:
 
 volumes:
   mongo_data:
+  postgres_data:

@@ -37,6 +37,7 @@ cat > .env <<'EOF'
 MONGO_URL=mongodb://localhost:27017
 DB_NAME=sprinthub
 JWT_SECRET=change-me-to-a-random-string
+DATABASE_URL=postgres://sprinthub:sprinthub@localhost:5432/sprinthub?sslmode=disable
 EOF
 
 go run .
@@ -48,13 +49,14 @@ Optional `.env` vars:
 | --- | --- | --- |
 | `ADMIN_EMAIL` | `widiardhana@gmail.com` | Seeded admin user email (only when `SEED_DEMO=true`) |
 | `ADMIN_PASSWORD` | `Admin@1234` | Seeded admin password |
+| `DATABASE_URL` | — | Postgres connection string (required for P1 RLS migration) |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated allowlist for credentialed CORS |
 | `SEED_DEMO` | `true` | Seed admin + demo org/projects on startup; set `false` in production |
 | `RATE_LIMIT` | `on` | Per-IP rate limiter for `POST /api/auth/*`; set `off` to disable |
 | `SMTP_*`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | — | Transactional email (see `.env.example`) |
 | `WEBHOOK_CRON_SECRET` | — | Bearer token for `/api/cron/*`; the built-in scheduler also runs these jobs |
 
-On first startup the backend seeds the admin user, an "Acme Corp" org, and sample projects/sprints/tasks when `SEED_DEMO=true`. Health probe at http://localhost:8000/healthz. Access tokens expire in 15 minutes and are silently refreshed via `POST /api/auth/refresh` (HttpOnly cookie).
+On first startup the backend connects to Mongo, and—if `DATABASE_URL` is set—to Postgres and runs migrations (`backend/migrations/`). It seeds the admin user + demo org/projects/sprints/tasks when `SEED_DEMO=true`. Health probe at http://localhost:8000/healthz. Access tokens expire in 15 minutes and are silently refreshed via `POST /api/auth/refresh` (HttpOnly cookie).
 
 ## Frontend setup
 

@@ -21,6 +21,7 @@ import (
 
 type config struct {
 	MongoURL, DBName, JWTSecret string
+	DatabaseURL                 string
 	AdminEmail, AdminPassword   string
 	EmailFromName, EmailFrom    string
 	SMTPHost                    string
@@ -45,6 +46,7 @@ func loadConfig() {
 	cfg = config{
 		MongoURL:          get("MONGO_URL", ""),
 		DBName:            get("DB_NAME", ""),
+		DatabaseURL:       get("DATABASE_URL", ""),
 		JWTSecret:         get("JWT_SECRET", ""),
 		AdminEmail:        get("ADMIN_EMAIL", ""),
 		AdminPassword:     get("ADMIN_PASSWORD", ""),
@@ -66,6 +68,9 @@ func loadConfig() {
 	cfg.SeedDemo = get("SEED_DEMO", "true") == "true"
 	if cfg.MongoURL == "" || cfg.DBName == "" || cfg.JWTSecret == "" {
 		log.Fatal("MONGO_URL, DB_NAME and JWT_SECRET must be set")
+	}
+	if cfg.DatabaseURL == "" {
+		log.Println("DATABASE_URL not set; Postgres features disabled")
 	}
 	if v := os.Getenv("SMTP_PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
@@ -94,6 +99,10 @@ func main() {
 			log.Println("mongo disconnect:", err)
 		}
 	}()
+	if err := connectPostgres(ctx, cfg.DatabaseURL); err != nil {
+		log.Fatalf("postgres connect failed: %v", err)
+	}
+	defer closePostgres()
 
 	if err := initIndexes(ctx); err != nil {
 		log.Fatalf("index creation failed: %v", err)
