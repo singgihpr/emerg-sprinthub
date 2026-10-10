@@ -24,6 +24,7 @@ const NAV = [
   { to: "/sprints", label: "Sprints", icon: Rocket },
   { to: "/team", label: "Team Activity", icon: Pulse, roles: ["owner", "admin", "manager"] },
   { to: "/members", label: "Members", icon: Users },
+  { to: "/roles", label: "Roles", icon: Gear, roles: ["owner", "admin"] },
   { to: "/analytics", label: "Analytics", icon: ChartBar },
 ];
 

@@ -110,12 +110,12 @@ func createProject(c echo.Context) error {
 		return herr
 	}
 	orgID := c.Param("org_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermCreateProject); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b projectCreate
 	if err := bindBody(c, &b); err != nil {
@@ -159,12 +159,12 @@ func updateProject(c echo.Context) error {
 	}
 	orgID := c.Param("org_id")
 	projectID := c.Param("project_id")
-	m, herr := requireProjectAccess(c, orgID, projectID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := requireProjectAccess(c, orgID, projectID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermEditProject); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b projectUpdate
 	if err := bindBody(c, &b); err != nil {
@@ -210,12 +210,12 @@ func deleteProject(c echo.Context) error {
 	}
 	orgID := c.Param("org_id")
 	projectID := c.Param("project_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin") {
-		return echo.NewHTTPError(http.StatusForbidden, "Only owner or admin can delete projects")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermDeleteProject); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	ctx := c.Request().Context()
 	project, err := pgFindOne(ctx, "projects", map[string]any{"project_id": projectID, "org_id": orgID}, nil)
@@ -312,12 +312,12 @@ func addProjectMember(c echo.Context) error {
 	}
 	orgID := c.Param("org_id")
 	projectID := c.Param("project_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermManageProjectMembers); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b projectMemberAdd
 	if err := bindBody(c, &b); err != nil {
@@ -362,12 +362,12 @@ func removeProjectMember(c echo.Context) error {
 	orgID := c.Param("org_id")
 	projectID := c.Param("project_id")
 	targetUserID := c.Param("user_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermManageProjectMembers); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	_ = pgDelete(c.Request().Context(), "project_members",
 		map[string]any{"org_id": orgID, "project_id": projectID, "user_id": targetUserID})
@@ -454,12 +454,12 @@ func createSprint(c echo.Context) error {
 	if b.ProjectID == "" || b.Name == "" {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
-	m, herr := requireProjectAccess(c, orgID, b.ProjectID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := requireProjectAccess(c, orgID, b.ProjectID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermCreateTask); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	doc := map[string]any{
 		"sprint_id": newID("spr"), "org_id": orgID, "project_id": b.ProjectID,
@@ -488,12 +488,12 @@ func updateSprint(c echo.Context) error {
 	if sprint == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Sprint not found")
 	}
-	m, herr := requireProjectAccess(c, orgID, asStr(sprint["project_id"]), asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := requireProjectAccess(c, orgID, asStr(sprint["project_id"]), userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermEditTask); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b sprintUpdate
 	if err := bindBody(c, &b); err != nil {
@@ -546,12 +546,12 @@ func deleteSprint(c echo.Context) error {
 	if sprint == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Sprint not found")
 	}
-	m, herr := requireProjectAccess(c, orgID, asStr(sprint["project_id"]), asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := requireProjectAccess(c, orgID, asStr(sprint["project_id"]), userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermDeleteTask); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	_ = pgUpdate(ctx, "tasks",
 		map[string]any{"org_id": orgID, "sprint_id": sprintID},

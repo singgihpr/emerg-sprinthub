@@ -44,6 +44,24 @@ func seed(ctx context.Context) {
 			"membership_id": newID("mem"), "org_id": orgID,
 			"user_id": userID, "role": "owner", "created_at": isoNow(),
 		})
+		ownerRoleID := newID("role")
+		_ = pgPoolInsert(ctx, "roles", map[string]any{
+			"role_id": ownerRoleID, "org_id": orgID, "name": "Owner",
+			"description": "Full access to everything",
+			"permissions": []string{"manage_org", "manage_billing", "invite_members", "manage_roles", "view_analytics", "create_project", "edit_project", "delete_project", "manage_project_members", "create_task", "edit_task", "delete_task", "assign_task", "edit_comments", "create_time_entries", "view_time_entries"},
+			"is_default": false, "is_system": true, "created_at": isoNow(), "updated_at": isoNow(),
+		})
+		memberRoleID := newID("role")
+		_ = pgPoolInsert(ctx, "roles", map[string]any{
+			"role_id": memberRoleID, "org_id": orgID, "name": "Member",
+			"description": "Standard access",
+			"permissions": []string{"create_task", "edit_task", "assign_task", "edit_comments", "create_time_entries", "view_time_entries"},
+			"is_default": true, "is_system": true, "created_at": isoNow(), "updated_at": isoNow(),
+		})
+		_ = pgPoolInsert(ctx, "role_assignments", map[string]any{
+			"assignment_id": newID("ra"), "org_id": orgID,
+			"user_id": userID, "role_id": ownerRoleID, "created_at": isoNow(),
+		})
 		// Seed a demo project + sprint + tasks
 		prjID := newID("prj")
 		_ = pgPoolInsert(ctx, "projects", map[string]any{

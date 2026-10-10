@@ -141,6 +141,15 @@ func newApp() *echo.Echo {
 	api.GET("/orgs/:org_id/members", listMembers)
 	api.POST("/orgs/:org_id/members", inviteMember)
 
+	api.GET("/orgs/:org_id/permissions", listPermissions)
+	api.GET("/orgs/:org_id/roles", listRoles)
+	api.POST("/orgs/:org_id/roles", createRole)
+	api.PATCH("/orgs/:org_id/roles/:role_id", updateRole)
+	api.DELETE("/orgs/:org_id/roles/:role_id", deleteRole)
+	api.POST("/orgs/:org_id/members/:user_id/roles", assignRole)
+	api.DELETE("/orgs/:org_id/members/:user_id/roles/:role_id", removeRole)
+	api.GET("/orgs/:org_id/members/:user_id/roles", getUserRoles)
+
 	api.GET("/invites/:token", getInvite)
 	api.POST("/invites/:token/accept", acceptInvite)
 

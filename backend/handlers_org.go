@@ -98,6 +98,24 @@ func createOrg(c echo.Context) error {
 		"membership_id": newID("mem"), "org_id": orgID,
 		"user_id": user["user_id"], "role": "owner", "created_at": isoNow(),
 	})
+	ownerRoleID := newID("role")
+	_ = pgInsert(ctx, "roles", map[string]any{
+		"role_id": ownerRoleID, "org_id": orgID, "name": "Owner",
+		"description": "Full access to everything",
+		"permissions": []string{"manage_org", "manage_billing", "invite_members", "manage_roles", "view_analytics", "create_project", "edit_project", "delete_project", "manage_project_members", "create_task", "edit_task", "delete_task", "assign_task", "edit_comments", "create_time_entries", "view_time_entries"},
+		"is_default": false, "is_system": true, "created_at": isoNow(), "updated_at": isoNow(),
+	})
+	memberRoleID := newID("role")
+	_ = pgInsert(ctx, "roles", map[string]any{
+		"role_id": memberRoleID, "org_id": orgID, "name": "Member",
+		"description": "Standard access",
+		"permissions": []string{"create_task", "edit_task", "assign_task", "edit_comments", "create_time_entries", "view_time_entries"},
+		"is_default": true, "is_system": true, "created_at": isoNow(), "updated_at": isoNow(),
+	})
+	_ = pgInsert(ctx, "role_assignments", map[string]any{
+		"assignment_id": newID("ra"), "org_id": orgID,
+		"user_id": user["user_id"], "role_id": ownerRoleID, "created_at": isoNow(),
+	})
 	doc["role"] = "owner"
 	return c.JSON(http.StatusOK, doc)
 }
@@ -108,12 +126,12 @@ func updateOrg(c echo.Context) error {
 		return herr
 	}
 	orgID := c.Param("org_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin") {
-		return echo.NewHTTPError(http.StatusForbidden, "Only owner or admin can edit workspace")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermManageOrg); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b orgUpdate
 	if err := bindBody(c, &b); err != nil {
@@ -140,7 +158,6 @@ func updateOrg(c echo.Context) error {
 	if org == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
 	}
-	org["role"] = m["role"]
 	return c.JSON(http.StatusOK, org)
 }
 
@@ -181,12 +198,12 @@ func uploadOrgLogo(c echo.Context) error {
 		return herr
 	}
 	orgID := c.Param("org_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin") {
-		return echo.NewHTTPError(http.StatusForbidden, "Only owner or admin can upload workspace logo")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermManageOrg); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	fh, err := c.FormFile("file")
 	if err != nil {
@@ -225,7 +242,6 @@ func uploadOrgLogo(c echo.Context) error {
 	if org == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
 	}
-	org["role"] = m["role"]
 	return c.JSON(http.StatusOK, org)
 }
 
@@ -297,11 +313,11 @@ func inviteMember(c echo.Context) error {
 		return herr
 	}
 	orgID := c.Param("org_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin") {
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermInviteMembers); err != nil || !ok {
 		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b memberInvite
@@ -357,6 +373,13 @@ func inviteMember(c echo.Context) error {
 		"membership_id": newID("mem"), "org_id": orgID,
 		"user_id": targetID, "role": role, "created_at": isoNow(),
 	})
+	defaultRole, err := pgFindOne(ctx, "roles", map[string]any{"org_id": orgID, "is_default": true}, nil)
+	if err == nil && defaultRole != nil {
+		_ = pgInsert(ctx, "role_assignments", map[string]any{
+			"assignment_id": newID("ra"), "org_id": orgID,
+			"user_id": targetID, "role_id": asStr(defaultRole["role_id"]), "created_at": isoNow(),
+		})
+	}
 	incrementQuota(ctx, orgID, "members", 1)
 	logUsageEvent(ctx, orgID, "member_added", 1)
 	token := ""

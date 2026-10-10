@@ -15,6 +15,7 @@ import Members from "@/pages/Members";
 import TeamActivity from "@/pages/TeamActivity";
 import Profile from "@/pages/Profile";
 import Analytics from "@/pages/Analytics";
+import Roles from "@/pages/Roles";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -47,6 +48,7 @@ function AppRoutes() {
         <Route path="team" element={<TeamActivity />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="roles" element={<Roles />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

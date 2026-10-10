@@ -21,12 +21,12 @@ func teamActivity(c echo.Context) error {
 		return herr
 	}
 	orgID := c.Param("org_id")
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin", "manager") {
-		return echo.NewHTTPError(http.StatusForbidden, "Requires admin or manager role")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermViewAnalytics); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	ctx := c.Request().Context()
 

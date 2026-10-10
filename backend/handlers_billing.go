@@ -28,12 +28,12 @@ func createCheckoutSession(c echo.Context) error {
 	if orgID == "" {
 		orgID = extractOrgIDFromPath(c.Request().URL.Path)
 	}
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin") {
-		return echo.NewHTTPError(http.StatusForbidden, "Only owner or admin can manage billing")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermManageBilling); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	var b checkoutRequest
 	if err := bindBody(c, &b); err != nil {
@@ -105,12 +105,12 @@ func createPortalSession(c echo.Context) error {
 	if orgID == "" {
 		orgID = extractOrgIDFromPath(c.Request().URL.Path)
 	}
-	m, herr := ensureMember(c, orgID, asStr(user["user_id"]))
-	if herr != nil {
+	userID := asStr(user["user_id"])
+	if _, herr := ensureMember(c, orgID, userID); herr != nil {
 		return herr
 	}
-	if !roleIs(m, "owner", "admin") {
-		return echo.NewHTTPError(http.StatusForbidden, "Only owner or admin can manage billing")
+	if ok, err := hasPermission(c.Request().Context(), orgID, userID, PermManageBilling); err != nil || !ok {
+		return echo.NewHTTPError(http.StatusForbidden, "Insufficient permissions")
 	}
 	if cfg.StripeSecretKey == "" {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "Billing not configured")
