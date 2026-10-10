@@ -125,6 +125,9 @@ func createProject(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
 	ctx := c.Request().Context()
+	if herr := checkQuota(ctx, orgID, "projects", 1); herr != nil {
+		return herr
+	}
 	status := "active"
 	if b.Status != nil {
 		status = *b.Status
@@ -140,6 +143,8 @@ func createProject(c echo.Context) error {
 	if err := pgInsert(ctx, "projects", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
+	incrementQuota(ctx, orgID, "projects", 1)
+	logUsageEvent(ctx, orgID, "project_created", 1)
 	_ = pgInsert(ctx, "project_members", map[string]any{
 		"project_member_id": newID("pmem"), "org_id": orgID, "project_id": projectID, "user_id": user["user_id"],
 		"role": "lead", "added_at": isoNow(), "added_by": user["user_id"],
@@ -247,6 +252,7 @@ func deleteProject(c echo.Context) error {
 		_, _ = pgExecRaw(ctx, q, args...)
 	}
 	_ = pgDelete(ctx, "projects", map[string]any{"project_id": projectID, "org_id": orgID})
+	decrementQuota(ctx, orgID, "projects", 1)
 	return c.JSON(http.StatusOK, map[string]any{"ok": true, "deleted_tasks": len(taskIDs)})
 }
 

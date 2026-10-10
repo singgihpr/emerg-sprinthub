@@ -31,6 +31,11 @@ type config struct {
 	AllowedOrigins              []string
 	RateLimitOff                bool
 	SeedDemo                    bool
+	StripeSecretKey             string
+	StripeWebhookSecret         string
+	OIDCIssuerURL               string
+	OIDCClientID                string
+	OIDCClientSecret            string
 }
 
 var cfg config
@@ -57,6 +62,11 @@ func loadConfig() {
 		SMTPPass:          get("SMTP_PASS", ""),
 		AppBaseURL:         get("APP_BASE_URL", ""),
 		WebhookCronSecret:  get("WEBHOOK_CRON_SECRET", ""),
+		StripeSecretKey:    get("STRIPE_SECRET_KEY", ""),
+		StripeWebhookSecret: get("STRIPE_WEBHOOK_SECRET", ""),
+		OIDCIssuerURL:      get("OIDC_ISSUER_URL", ""),
+		OIDCClientID:       get("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:   get("OIDC_CLIENT_SECRET", ""),
 	}
 	for _, o := range strings.Split(get("ALLOWED_ORIGINS", "http://localhost:3000"), ",") {
 		if o = strings.TrimSpace(o); o != "" {
@@ -109,6 +119,7 @@ func newApp() *echo.Echo {
 	e.Use(corsMiddleware)
 	e.Use(authRateLimit)
 	e.Use(pgTxMiddleware)
+	e.Use(usageMeteringMiddleware)
 
 	e.GET("/healthz", func(c echo.Context) error { return c.JSON(http.StatusOK, map[string]any{"ok": true}) })
 
@@ -120,6 +131,8 @@ func newApp() *echo.Echo {
 	api.GET("/auth/me", me)
 	api.PATCH("/auth/me", updateProfile)
 	api.POST("/auth/change-password", changePassword)
+	api.GET("/auth/oidc/login", oidcLogin)
+	api.GET("/auth/oidc/callback", oidcCallback)
 
 	api.GET("/orgs", listOrgs)
 	api.POST("/orgs", createOrg)
@@ -162,6 +175,10 @@ func newApp() *echo.Echo {
 	api.GET("/orgs/:org_id/tasks/:task_id/comments", listComments)
 	api.POST("/orgs/:org_id/tasks/:task_id/comments", createComment)
 	api.GET("/orgs/:org_id/analytics", analytics)
+
+	api.POST("/billing/checkout", createCheckoutSession)
+	api.POST("/billing/portal", createPortalSession)
+	api.POST("/billing/webhook", stripeWebhook)
 
 	api.POST("/cron/weekly-digest", cronWeeklyDigest)
 	api.POST("/cron/spawn-recurring", cronSpawnRecurring)

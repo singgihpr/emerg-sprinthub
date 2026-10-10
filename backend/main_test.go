@@ -45,6 +45,7 @@ func TestMain(m *testing.M) {
 		fmt.Println("postgres migrations failed:", err)
 		os.Exit(1)
 	}
+	seed(ctx)
 	testSrv = httptest.NewServer(newApp())
 	code := m.Run()
 	testSrv.Close()
@@ -555,5 +556,110 @@ func TestAuthRateLimit(t *testing.T) {
 	}
 	if last != 429 {
 		t.Fatalf("expected 429 after burst, got %d", last)
+	}
+}
+
+func TestQuotaEnforcement(t *testing.T) {
+	// Register and create org
+	status, body := req(t, "POST", "/api/auth/register", "", map[string]string{
+		"email": "quota@test.com", "password": "Password123456", "name": "Quota Test",
+	})
+	if status != 200 {
+		t.Fatalf("register: %d %v", status, body)
+	}
+	token := body["token"].(string)
+	status, body = req(t, "POST", "/api/orgs", token, map[string]string{"name": "Quota Org"})
+	if status != 200 {
+		t.Fatalf("create org: %d %v", status, body)
+	}
+	orgID := body["org_id"].(string)
+
+	// Create org_quotas with 0 projects (Free plan allows 3)
+	ctx := context.Background()
+	_ = pgPoolUpdate(ctx, "org_quotas", map[string]any{"org_id": orgID}, map[string]any{
+		"current_members": 1, "current_projects": 0,
+	})
+
+	// Create 3 projects (should succeed)
+	for i := 0; i < 3; i++ {
+		status, _ = req(t, "POST", fmt.Sprintf("/api/orgs/%s/projects", orgID), token, map[string]string{
+			"name": fmt.Sprintf("Project %d", i), "key": fmt.Sprintf("P%d", i),
+		})
+		if status != 200 {
+			t.Fatalf("project %d: expected 200, got %d", i, status)
+		}
+	}
+
+	// 4th project should fail with 402
+	status, body = req(t, "POST", fmt.Sprintf("/api/orgs/%s/projects", orgID), token, map[string]string{
+		"name": "Project Over", "key": "POVER",
+	})
+	if status != 402 {
+		t.Fatalf("expected 402 for quota exceeded, got %d", status)
+	}
+	if !strings.Contains(fmt.Sprintf("%v", body), "Quota exceeded") {
+		t.Fatalf("expected quota exceeded message, got %v", body)
+	}
+}
+
+func TestWebhookSignatureVerification(t *testing.T) {
+	saved := cfg.StripeWebhookSecret
+	cfg.StripeWebhookSecret = "test_secret"
+	defer func() { cfg.StripeWebhookSecret = saved }()
+
+	e := echo.New()
+	e.POST("/billing/webhook", stripeWebhook)
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	// Invalid signature should return 400
+	r, _ := http.NewRequest("POST", srv.URL+"/billing/webhook", strings.NewReader("{}"))
+	r.Header.Set("Stripe-Signature", "invalid_sig")
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400 for invalid signature, got %d", resp.StatusCode)
+	}
+}
+
+func TestDowngradeSoftCap(t *testing.T) {
+	// Register and create org
+	status, body := req(t, "POST", "/api/auth/register", "", map[string]string{
+		"email": "downgrade@test.com", "password": "Password123456", "name": "Downgrade Test",
+	})
+	if status != 200 {
+		t.Fatalf("register: %d %v", status, body)
+	}
+	token := body["token"].(string)
+	status, body = req(t, "POST", "/api/orgs", token, map[string]string{"name": "Downgrade Org"})
+	if status != 200 {
+		t.Fatalf("create org: %d %v", status, body)
+	}
+	orgID := body["org_id"].(string)
+
+	ctx := context.Background()
+	// Set org to Pro plan with 5 members (over Free limit of 5, but at limit)
+	_ = pgPoolUpdate(ctx, "organizations", map[string]any{"org_id": orgID}, map[string]any{
+		"plan_id": "pro", "subscription_status": "active",
+	})
+	_ = pgPoolUpdate(ctx, "org_quotas", map[string]any{"org_id": orgID}, map[string]any{
+		"current_members": 5,
+	})
+
+	// Simulate downgrade to Free (5 members, but Free allows 5)
+	_ = pgPoolUpdate(ctx, "organizations", map[string]any{"org_id": orgID}, map[string]any{
+		"plan_id": "free", "subscription_status": "canceled",
+	})
+
+	// Existing 5 members are preserved (soft-cap)
+	// But adding a 6th member should fail with 402
+	status, body = req(t, "POST", fmt.Sprintf("/api/orgs/%s/members", orgID), token, map[string]string{
+		"email": "newmember@test.com", "name": "New Member", "role": "member",
+	})
+	if status != 402 {
+		t.Fatalf("expected 402 for quota exceeded after downgrade, got %d", status)
 	}
 }

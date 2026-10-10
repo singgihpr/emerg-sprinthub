@@ -6,6 +6,7 @@ import (
 )
 
 func seed(ctx context.Context) {
+	seedPlans(ctx)
 	if !cfg.SeedDemo {
 		log.Println("SEED_DEMO=false: skipping admin/demo seed (backfill only)")
 		backfill(ctx)
@@ -34,6 +35,10 @@ func seed(ctx context.Context) {
 		_ = pgPoolInsert(ctx, "organizations", map[string]any{
 			"org_id": orgID, "name": "Acme Corp",
 			"owner_id": userID, "logo": nil, "created_at": isoNow(),
+			"plan_id": "free", "subscription_status": "active",
+		})
+		_ = pgPoolInsert(ctx, "org_quotas", map[string]any{
+			"org_id": orgID, "current_members": 1, "current_projects": 1,
 		})
 		_ = pgPoolInsert(ctx, "memberships", map[string]any{
 			"membership_id": newID("mem"), "org_id": orgID,
@@ -100,6 +105,47 @@ func seed(ctx context.Context) {
 	}
 	backfill(ctx)
 	log.Println("Startup complete")
+}
+
+// seedPlans: ensure Free/Pro/Enterprise plans exist (idempotent).
+// Generous limits: Free=5 members/3 projects/500MB/10k API calls;
+// Pro=25/50/50GB/100k; Enterprise=1000/1000/500GB/1M (effectively unlimited).
+func seedPlans(ctx context.Context) {
+	plans := []struct {
+		id, name string
+		limits   string
+	}{
+		{"free", "Free", `{"members":5,"projects":3,"storage_mb":500,"api_calls_per_month":10000}`},
+		{"pro", "Pro", `{"members":25,"projects":50,"storage_mb":51200,"api_calls_per_month":100000}`},
+		{"enterprise", "Enterprise", `{"members":1000,"projects":1000,"storage_mb":512000,"api_calls_per_month":1000000}`},
+	}
+	for _, p := range plans {
+		exists, _ := pgPoolFindOne(ctx, "plans", map[string]any{"plan_id": p.id})
+		if exists == nil {
+			_ = pgPoolInsert(ctx, "plans", map[string]any{
+				"plan_id": p.id, "name": p.name, "stripe_price_id": nil,
+				"limits": p.limits,
+			})
+		}
+	}
+	orgs, _ := pgPoolFind(ctx, "organizations", map[string]any{})
+	for _, o := range orgs {
+		if asStr(o["plan_id"]) == "" {
+			_ = pgPoolUpdate(ctx, "organizations", map[string]any{"org_id": asStr(o["org_id"])},
+				map[string]any{"plan_id": "free", "subscription_status": "active"})
+		}
+		qRow, _ := pgPoolFindOne(ctx, "org_quotas", map[string]any{"org_id": asStr(o["org_id"])})
+		if qRow == nil {
+			var memberCount, projectCount int64
+			_ = pgPool.QueryRow(ctx, "SELECT COUNT(*) FROM memberships WHERE org_id = $1", asStr(o["org_id"])).Scan(&memberCount)
+			_ = pgPool.QueryRow(ctx, "SELECT COUNT(*) FROM projects WHERE org_id = $1", asStr(o["org_id"])).Scan(&projectCount)
+			_ = pgPoolInsert(ctx, "org_quotas", map[string]any{
+				"org_id":           asStr(o["org_id"]),
+				"current_members":  memberCount,
+				"current_projects": projectCount,
+			})
+		}
+	}
 }
 
 // backfill: ensure every project has its creator as a project_member

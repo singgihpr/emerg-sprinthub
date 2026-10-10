@@ -84,9 +84,15 @@ func createOrg(c echo.Context) error {
 	doc := map[string]any{
 		"org_id": orgID, "name": b.Name, "owner_id": user["user_id"],
 		"logo": b.Logo, "created_at": isoNow(),
+		"plan_id": "free", "subscription_status": "active",
 	}
 	if err := pgInsert(ctx, "organizations", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	if err := pgInsert(ctx, "org_quotas", map[string]any{
+		"org_id": orgID, "current_members": 1, "current_projects": 0,
+	}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to initialize quotas")
 	}
 	_ = pgInsert(ctx, "memberships", map[string]any{
 		"membership_id": newID("mem"), "org_id": orgID,
@@ -340,6 +346,9 @@ func inviteMember(c echo.Context) error {
 	if already != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "User already a member")
 	}
+	if herr := checkQuota(ctx, orgID, "members", 1); herr != nil {
+		return herr
+	}
 	role := b.Role
 	if role == "" {
 		role = "member"
@@ -348,6 +357,8 @@ func inviteMember(c echo.Context) error {
 		"membership_id": newID("mem"), "org_id": orgID,
 		"user_id": targetID, "role": role, "created_at": isoNow(),
 	})
+	incrementQuota(ctx, orgID, "members", 1)
+	logUsageEvent(ctx, orgID, "member_added", 1)
 	token := ""
 	if needsPassword {
 		token = urlsafeToken()
