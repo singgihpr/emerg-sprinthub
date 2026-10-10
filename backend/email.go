@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -19,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
 	"golang.org/x/net/html"
 )
 
@@ -323,29 +323,44 @@ func inviteEmail(name, inviterName, orgName, token string) (string, string) {
 // ---- weekly digest ----
 
 func buildAndSendDigest() {
-	ctx := mongoCtx()
+	ctx := context.Background()
 	today := nowUTC()
 	weekStart := today.AddDate(0, 0, -7).Format("2006-01-02")
-	memberships, err := findMany(ctx, colMembers,
-		bson.M{"role": bson.M{"$in": []string{"owner", "admin"}}}, bson.M{"_id": 0}, nil, 2000)
+	// Get owner/admin memberships
+	memberships, err := pgPoolFind(ctx, "memberships", map[string]any{})
 	if err != nil {
 		log.Println("digest membership fetch failed:", err)
 		return
 	}
+	// Filter to owner/admin
+	adminMemberships := []map[string]any{}
 	for _, m := range memberships {
-		org, err := findOne(ctx, colOrgs, bson.M{"org_id": m["org_id"]}, bson.M{"_id": 0})
+		role := asStr(m["role"])
+		if role == "owner" || role == "admin" {
+			adminMemberships = append(adminMemberships, m)
+		}
+	}
+	for _, m := range adminMemberships {
+		org, err := pgPoolFindOne(ctx, "organizations", map[string]any{"org_id": m["org_id"]})
 		if err != nil {
 			continue
 		}
-		u, err := findOne(ctx, colUsers, bson.M{"user_id": m["user_id"]}, bson.M{"_id": 0, "password_hash": 0})
+		u, err := pgPoolFindOne(ctx, "users", map[string]any{"user_id": m["user_id"]})
 		if err != nil || u == nil || asStr(u["email"]) == "" || org == nil {
 			continue
 		}
-		entries, err := findMany(ctx, colEntries,
-			bson.M{"org_id": m["org_id"], "date": bson.M{"$gte": weekStart}}, bson.M{"_id": 0}, nil, 5000)
+		entries, err := pgPoolFind(ctx, "time_entries", map[string]any{"org_id": m["org_id"]})
 		if err != nil {
 			continue
 		}
+		// Filter entries by week
+		filteredEntries := []map[string]any{}
+		for _, e := range entries {
+			if asStr(e["date"]) >= weekStart {
+				filteredEntries = append(filteredEntries, e)
+			}
+		}
+		entries = filteredEntries
 		byUser := map[string]int{}
 		for _, e := range entries {
 			byUser[asStr(e["user_id"])] += asInt(e["minutes"])
@@ -354,22 +369,26 @@ func buildAndSendDigest() {
 		for uid := range byUser {
 			userIDs = append(userIDs, uid)
 		}
-		umap := bson.M{}
-		if len(userIDs) > 0 {
-			users, err := findMany(ctx, colUsers, bson.M{"user_id": bson.M{"$in": userIDs}}, bson.M{"_id": 0, "password_hash": 0}, nil, 500)
-			if err == nil {
-				for _, x := range users {
-					umap[asStr(x["user_id"])] = x
-				}
+		umap := map[string]map[string]any{}
+		for _, uid := range userIDs {
+			ux, err := pgPoolFindOne(ctx, "users", map[string]any{"user_id": uid})
+			if err == nil && ux != nil {
+				umap[uid] = ux
 			}
 		}
-		overdue, err := findMany(ctx, colTasks, bson.M{
-			"org_id":   m["org_id"],
-			"status":   bson.M{"$ne": "done"},
-			"due_date": bson.M{"$lt": today.Format("2006-01-02")},
-		}, bson.M{"_id": 0}, nil, 1000)
+		// Get overdue tasks
+		allTasks, err := pgPoolFind(ctx, "tasks", map[string]any{"org_id": m["org_id"]})
 		if err != nil {
 			continue
+		}
+		todayStr := today.Format("2006-01-02")
+		overdue := []map[string]any{}
+		for _, t := range allTasks {
+			status := asStr(t["status"])
+			dueDate := asStr(t["due_date"])
+			if status != "done" && dueDate != "" && dueDate < todayStr {
+				overdue = append(overdue, t)
+			}
 		}
 
 		type row struct {
@@ -389,8 +408,8 @@ func buildAndSendDigest() {
 			var sb strings.Builder
 			for _, r := range rowsSorted {
 				uname := "Unknown"
-				if ux, ok := umap[r.uid].(bson.M); ok {
-					uname = bsonStr(ux, "name", bsonStr(ux, "email", "Unknown"))
+				if ux, ok := umap[r.uid]; ok {
+					uname = mapStrDefault(ux, "name", mapStrDefault(ux, "email", "Unknown"))
 				}
 				fmt.Fprintf(&sb,
 					`<tr><td style="padding:6px 12px;border-top:1px solid #E2E8F0">%s</td>`+
@@ -411,7 +430,7 @@ func buildAndSendDigest() {
 				}
 				fmt.Fprintf(&sb, `<li style="padding:4px 0"><strong>%s</strong> `+
 					`<span style="color:#94A3B8">— due %s</span></li>`,
-					escHTML(asStr(t["title"])), escHTML(bsonStr(t, "due_date", "")))
+					escHTML(asStr(t["title"])), escHTML(mapStrDefault(t, "due_date", "")))
 			}
 			overdueHTML = sb.String()
 		}
@@ -437,7 +456,7 @@ func buildAndSendDigest() {
     </table>
   </td></tr>
 </table>
-`, escHTML(orgName), escHTML(bsonStr(u, "name", bsonStr(u, "email", ""))), rowsHTML,
+`, escHTML(orgName), escHTML(mapStrDefault(u, "name", mapStrDefault(u, "email", ""))), rowsHTML,
 			len(overdue), overdueHTML, escHTML(cfg.EmailFromName), escHTML(orgName))
 		_, _ = sendEmail(asStr(u["email"]), subject, htmlBody)
 	}

@@ -1,11 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // ---- tasks ----
@@ -24,12 +25,29 @@ func listTasks(c echo.Context) error {
 	if herr != nil {
 		return herr
 	}
-	q := bson.M{"org_id": orgID}
-	if !all {
-		q["project_id"] = bson.M{"$in": allowed}
+	ctx := c.Request().Context()
+	var tasks []map[string]any
+	var err error
+	if all {
+		tasks, err = pgFindMany(ctx, "tasks", map[string]any{"org_id": orgID}, nil, "created_at DESC", 2000)
+	} else {
+		if len(allowed) == 0 {
+			return c.JSON(http.StatusOK, []map[string]any{})
+		}
+		placeholders := make([]string, len(allowed))
+		args := []any{orgID}
+		for i, id := range allowed {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args = append(args, id)
+		}
+		q := fmt.Sprintf("SELECT * FROM tasks WHERE org_id = $1 AND project_id IN (%s) ORDER BY created_at DESC LIMIT 2000",
+			strings.Join(placeholders, ","))
+		rows, e := pgExecQuery(ctx, q, args...)
+		if e != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		tasks = rows
 	}
-	tasks, err := findMany(c.Request().Context(), colTasks, q, bson.M{"_id": 0},
-		bson.D{{Key: "created_at", Value: -1}}, 2000)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -66,7 +84,7 @@ func createTask(c echo.Context) error {
 	if b.EstimateHours != nil {
 		estimate = *b.EstimateHours
 	}
-	doc := bson.M{
+	doc := map[string]any{
 		"task_id": newID("tsk"), "org_id": orgID,
 		"project_id": b.ProjectID, "title": b.Title,
 		"description": b.Description, "status": b.Status,
@@ -80,32 +98,22 @@ func createTask(c echo.Context) error {
 		"updated_at":   isoNow(),
 		"completed_at": nil,
 	}
-	if err := insertDoc(ctx, colTasks, doc); err != nil {
+	if err := pgInsert(ctx, "tasks", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	if recurringID != "" {
-		base := todayUTC()
-		if b.StartDate != nil && *b.StartDate != "" {
-			base = *b.StartDate
-		}
-		baseDate, ok := parseDate(base)
-		if !ok {
-			baseDate = nowUTC()
-		}
-		nextStart := advanceDate(baseDate, repeat)
 		desc := ""
 		if b.Description != nil {
 			desc = *b.Description
 		}
-		_ = insertDoc(ctx, colRecurring, bson.M{
+		_ = pgInsert(ctx, "recurring_tasks", map[string]any{
 			"recurring_id": recurringID, "org_id": orgID, "project_id": b.ProjectID,
 			"title": b.Title, "description": desc,
 			"priority": b.Priority, "type": b.Type,
 			"assignee_id": b.AssigneeID, "sprint_id": b.SprintID,
 			"estimate_hours": estimate,
-			"frequency":      repeat, "next_start": nextStart.Format("2006-01-02"),
-			"active": true, "created_by": user["user_id"],
-			"created_at": isoNow(), "last_spawned_at": nil,
+			"repeat": repeat, "active": true, "created_by": user["user_id"],
+			"created_at": isoNow(),
 		})
 	}
 	return c.JSON(http.StatusOK, doc)
@@ -125,7 +133,7 @@ func updateTask(c echo.Context) error {
 	if err := bindBody(c, &b); err != nil {
 		return err
 	}
-	updates := bson.M{}
+	updates := map[string]any{}
 	if b.Title != nil {
 		updates["title"] = *b.Title
 	}
@@ -161,16 +169,15 @@ func updateTask(c echo.Context) error {
 		updates["former_sprint_name"] = nil
 	}
 	ctx := c.Request().Context()
-	res, err := colTasks.UpdateOne(ctx, bson.M{"task_id": taskID, "org_id": orgID}, bson.M{"$set": updates})
+	if err := pgUpdate(ctx, "tasks", map[string]any{"task_id": taskID, "org_id": orgID}, updates); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	updated, err := pgFindOne(ctx, "tasks", map[string]any{"task_id": taskID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	if res.MatchedCount == 0 {
+	if updated == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Task not found")
-	}
-	updated, err := findOne(ctx, colTasks, bson.M{"task_id": taskID}, bson.M{"_id": 0})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	return c.JSON(http.StatusOK, updated)
 }
@@ -186,9 +193,9 @@ func deleteTask(c echo.Context) error {
 		return herr
 	}
 	ctx := c.Request().Context()
-	_, _ = colTasks.DeleteOne(ctx, bson.M{"task_id": taskID, "org_id": orgID})
-	_, _ = colEntries.DeleteMany(ctx, bson.M{"task_id": taskID})
-	return c.JSON(http.StatusOK, bson.M{"ok": true})
+	_ = pgDelete(ctx, "tasks", map[string]any{"task_id": taskID, "org_id": orgID})
+	_ = pgDelete(ctx, "time_entries", map[string]any{"task_id": taskID})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---- recurring ----
@@ -207,11 +214,29 @@ func listRecurring(c echo.Context) error {
 	if herr != nil {
 		return herr
 	}
-	q := bson.M{"org_id": orgID, "active": true}
-	if !all {
-		q["project_id"] = bson.M{"$in": allowed}
+	ctx := c.Request().Context()
+	var rows []map[string]any
+	var err error
+	if all {
+		rows, err = pgFindMany(ctx, "recurring_tasks", map[string]any{"org_id": orgID, "active": true}, nil, "", 1000)
+	} else {
+		if len(allowed) == 0 {
+			return c.JSON(http.StatusOK, []map[string]any{})
+		}
+		placeholders := make([]string, len(allowed))
+		args := []any{orgID}
+		for i, id := range allowed {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args = append(args, id)
+		}
+		q := fmt.Sprintf("SELECT * FROM recurring_tasks WHERE org_id = $1 AND active = true AND project_id IN (%s) LIMIT 1000",
+			strings.Join(placeholders, ","))
+		result, e := pgExecQuery(ctx, q, args...)
+		if e != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		rows = result
 	}
-	rows, err := findMany(c.Request().Context(), colRecurring, q, bson.M{"_id": 0}, nil, 1000)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -226,7 +251,7 @@ func stopRecurring(c echo.Context) error {
 	orgID := c.Param("org_id")
 	recurringID := c.Param("recurring_id")
 	ctx := c.Request().Context()
-	tpl, err := findOne(ctx, colRecurring, bson.M{"recurring_id": recurringID, "org_id": orgID}, nil)
+	tpl, err := pgFindOne(ctx, "recurring_tasks", map[string]any{"recurring_id": recurringID, "org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -236,11 +261,11 @@ func stopRecurring(c echo.Context) error {
 	if _, herr := requireProjectAccess(c, orgID, asStr(tpl["project_id"]), asStr(user["user_id"])); herr != nil {
 		return herr
 	}
-	if _, err := colRecurring.UpdateOne(ctx, bson.M{"recurring_id": recurringID, "org_id": orgID},
-		bson.M{"$set": bson.M{"active": false}}); err != nil {
+	if err := pgUpdate(ctx, "recurring_tasks", map[string]any{"recurring_id": recurringID, "org_id": orgID},
+		map[string]any{"active": false}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	return c.JSON(http.StatusOK, bson.M{"status": "stopped"})
+	return c.JSON(http.StatusOK, map[string]any{"status": "stopped"})
 }
 
 // ---- time tracking ----
@@ -255,14 +280,18 @@ func listTimeEntries(c echo.Context) error {
 	if herr != nil {
 		return herr
 	}
-	allowed, all, herr := accessibleProjectIDs(c, orgID, asStr(user["user_id"]), asStr(m["role"]))
+	_, all, herr := accessibleProjectIDs(c, orgID, asStr(user["user_id"]), asStr(m["role"]))
 	if herr != nil {
 		return herr
 	}
-	q := bson.M{"org_id": orgID}
-	if !all {
-		tasks, err := findMany(c.Request().Context(), colTasks,
-			bson.M{"org_id": orgID, "project_id": bson.M{"$in": allowed}}, bson.M{"_id": 0}, nil, 5000)
+	ctx := c.Request().Context()
+	var entries []map[string]any
+	var err error
+	if all {
+		entries, err = pgFindMany(ctx, "time_entries", map[string]any{"org_id": orgID}, nil, "created_at DESC", 2000)
+	} else {
+		tasks, err := pgFindMany(ctx, "tasks",
+			map[string]any{"org_id": orgID}, []string{"task_id"}, "", 5000)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 		}
@@ -270,10 +299,23 @@ func listTimeEntries(c echo.Context) error {
 		for _, t := range tasks {
 			taskIDs = append(taskIDs, asStr(t["task_id"]))
 		}
-		q["task_id"] = bson.M{"$in": taskIDs}
+		if len(taskIDs) == 0 {
+			return c.JSON(http.StatusOK, []map[string]any{})
+		}
+		placeholders := make([]string, len(taskIDs))
+		args := []any{orgID}
+		for i, id := range taskIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args = append(args, id)
+		}
+		q := fmt.Sprintf("SELECT * FROM time_entries WHERE org_id = $1 AND task_id IN (%s) ORDER BY created_at DESC LIMIT 2000",
+			strings.Join(placeholders, ","))
+		rows, e := pgExecQuery(ctx, q, args...)
+		if e != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		entries = rows
 	}
-	entries, err := findMany(c.Request().Context(), colEntries, q, bson.M{"_id": 0},
-		bson.D{{Key: "created_at", Value: -1}}, 2000)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -301,18 +343,28 @@ func createTimeEntry(c echo.Context) error {
 	if b.Date != nil && *b.Date != "" {
 		date = *b.Date
 	}
-	doc := bson.M{
+	doc := map[string]any{
 		"entry_id": newID("te"), "org_id": orgID,
 		"task_id": b.TaskID, "user_id": user["user_id"],
 		"minutes": b.Minutes, "note": b.Note,
 		"date":       date,
 		"created_at": isoNow(),
 	}
-	if err := insertDoc(ctx, colEntries, doc); err != nil {
+	if err := pgInsert(ctx, "time_entries", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	_, _ = colTasks.UpdateOne(ctx, bson.M{"task_id": b.TaskID, "org_id": orgID},
-		bson.M{"$inc": bson.M{"logged_minutes": b.Minutes}})
+	// Increment task logged_minutes
+	task, _ := pgFindOne(ctx, "tasks", map[string]any{"task_id": b.TaskID, "org_id": orgID}, nil)
+	if task != nil {
+		logged := 0
+		if v, ok := task["logged_minutes"].(int64); ok {
+			logged = int(v)
+		} else if v, ok := task["logged_minutes"].(int); ok {
+			logged = v
+		}
+		_ = pgUpdate(ctx, "tasks", map[string]any{"task_id": b.TaskID, "org_id": orgID},
+			map[string]any{"logged_minutes": logged + b.Minutes})
+	}
 	return c.JSON(http.StatusOK, doc)
 }
 
@@ -327,13 +379,13 @@ func getTimer(c echo.Context) error {
 	if _, herr := ensureMember(c, orgID, asStr(user["user_id"])); herr != nil {
 		return herr
 	}
-	t, err := findOne(c.Request().Context(), colTimers,
-		bson.M{"org_id": orgID, "user_id": user["user_id"]}, bson.M{"_id": 0})
+	t, err := pgFindOne(c.Request().Context(), "active_timers",
+		map[string]any{"org_id": orgID, "user_id": user["user_id"]}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	if t == nil {
-		return c.JSON(http.StatusOK, bson.M{})
+		return c.JSON(http.StatusOK, map[string]any{})
 	}
 	return c.JSON(http.StatusOK, t)
 }
@@ -344,7 +396,7 @@ func startTimer(c echo.Context) error {
 		return herr
 	}
 	orgID := c.Param("org_id")
-	var body bson.M
+	var body map[string]any
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
@@ -356,13 +408,13 @@ func startTimer(c echo.Context) error {
 		return herr
 	}
 	ctx := c.Request().Context()
-	_, _ = colTimers.DeleteMany(ctx, bson.M{"org_id": orgID, "user_id": user["user_id"]})
-	doc := bson.M{
-		"timer_id": newID("tmr"), "org_id": orgID,
+	_ = pgDelete(ctx, "active_timers", map[string]any{"org_id": orgID, "user_id": user["user_id"]})
+	doc := map[string]any{
+		"org_id": orgID,
 		"user_id": user["user_id"], "task_id": taskID,
 		"started_at": isoNow(),
 	}
-	if err := insertDoc(ctx, colTimers, doc); err != nil {
+	if err := pgInsert(ctx, "active_timers", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	return c.JSON(http.StatusOK, doc)
@@ -378,14 +430,22 @@ func stopTimer(c echo.Context) error {
 		return herr
 	}
 	ctx := c.Request().Context()
-	t, err := findOne(ctx, colTimers, bson.M{"org_id": orgID, "user_id": user["user_id"]}, bson.M{"_id": 0})
+	t, err := pgFindOne(ctx, "active_timers", map[string]any{"org_id": orgID, "user_id": user["user_id"]}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	if t == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "No active timer")
 	}
-	started, ok := parseISO(asStr(t["started_at"]))
+	var started time.Time
+	var ok bool
+	switch v := t["started_at"].(type) {
+	case time.Time:
+		started = v
+		ok = true
+	case string:
+		started, ok = parseISO(v)
+	}
 	if !ok {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -393,19 +453,28 @@ func stopTimer(c echo.Context) error {
 	if minutes < 1 {
 		minutes = 1
 	}
-	entry := bson.M{
+	entry := map[string]any{
 		"entry_id": newID("te"), "org_id": orgID,
 		"task_id": t["task_id"], "user_id": user["user_id"],
 		"minutes": minutes, "note": "Timer",
 		"date":       todayUTC(),
 		"created_at": isoNow(),
 	}
-	if err := insertDoc(ctx, colEntries, entry); err != nil {
+	if err := pgInsert(ctx, "time_entries", entry); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	_, _ = colTasks.UpdateOne(ctx, bson.M{"task_id": t["task_id"], "org_id": orgID},
-		bson.M{"$inc": bson.M{"logged_minutes": minutes}})
-	_, _ = colTimers.DeleteMany(ctx, bson.M{"org_id": orgID, "user_id": user["user_id"]})
+	task, _ := pgFindOne(ctx, "tasks", map[string]any{"task_id": t["task_id"], "org_id": orgID}, nil)
+	if task != nil {
+		logged := 0
+		if v, ok := task["logged_minutes"].(int64); ok {
+			logged = int(v)
+		} else if v, ok := task["logged_minutes"].(int); ok {
+			logged = v
+		}
+		_ = pgUpdate(ctx, "tasks", map[string]any{"task_id": t["task_id"], "org_id": orgID},
+			map[string]any{"logged_minutes": logged + minutes})
+	}
+	_ = pgDelete(ctx, "active_timers", map[string]any{"org_id": orgID, "user_id": user["user_id"]})
 	return c.JSON(http.StatusOK, entry)
 }
 

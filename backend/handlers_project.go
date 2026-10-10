@@ -1,11 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // accessibleProjectIDs mirrors python _get_accessible_project_ids:
@@ -14,8 +14,8 @@ func accessibleProjectIDs(c echo.Context, orgID, userID, role string) ([]string,
 	if role == "owner" || role == "admin" {
 		return nil, true, nil
 	}
-	pm, err := findMany(c.Request().Context(), colProjMem,
-		bson.M{"org_id": orgID, "user_id": userID}, bson.M{"_id": 0}, nil, 500)
+	pm, err := pgFindMany(c.Request().Context(), "project_members",
+		map[string]any{"org_id": orgID, "user_id": userID}, nil, "", 500)
 	if err != nil {
 		return nil, false, echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -26,14 +26,14 @@ func accessibleProjectIDs(c echo.Context, orgID, userID, role string) ([]string,
 	return ids, false, nil
 }
 
-func requireProjectAccess(c echo.Context, orgID, projectID, userID string) (bson.M, *echo.HTTPError) {
+func requireProjectAccess(c echo.Context, orgID, projectID, userID string) (map[string]any, *echo.HTTPError) {
 	m, herr := ensureMember(c, orgID, userID)
 	if herr != nil {
 		return nil, herr
 	}
 	if !roleIs(m, "owner", "admin") {
-		pm, err := findOne(c.Request().Context(), colProjMem,
-			bson.M{"org_id": orgID, "project_id": projectID, "user_id": userID}, nil)
+		pm, err := pgFindOne(c.Request().Context(), "project_members",
+			map[string]any{"org_id": orgID, "project_id": projectID, "user_id": userID}, nil)
 		if err != nil {
 			return nil, echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 		}
@@ -44,9 +44,9 @@ func requireProjectAccess(c echo.Context, orgID, projectID, userID string) (bson
 	return m, nil
 }
 
-func requireTaskAccess(c echo.Context, orgID, taskID, userID string) (bson.M, *echo.HTTPError) {
-	task, err := findOne(c.Request().Context(), colTasks,
-		bson.M{"task_id": taskID, "org_id": orgID}, bson.M{"_id": 0})
+func requireTaskAccess(c echo.Context, orgID, taskID, userID string) (map[string]any, *echo.HTTPError) {
+	task, err := pgFindOne(c.Request().Context(), "tasks",
+		map[string]any{"task_id": taskID, "org_id": orgID}, nil)
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -75,11 +75,29 @@ func listProjects(c echo.Context) error {
 	if herr != nil {
 		return herr
 	}
-	q := bson.M{"org_id": orgID}
-	if !all {
-		q["project_id"] = bson.M{"$in": allowed}
+	ctx := c.Request().Context()
+	var projects []map[string]any
+	var err error
+	if all {
+		projects, err = pgFindMany(ctx, "projects", map[string]any{"org_id": orgID}, nil, "", 500)
+	} else {
+		if len(allowed) == 0 {
+			return c.JSON(http.StatusOK, []map[string]any{})
+		}
+		placeholders := make([]string, len(allowed))
+		args := []any{orgID}
+		for i, id := range allowed {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args = append(args, id)
+		}
+		q := fmt.Sprintf("SELECT * FROM projects WHERE org_id = $1 AND project_id IN (%s) LIMIT 500",
+			strings.Join(placeholders, ","))
+		rows, e := pgExecQuery(ctx, q, args...)
+		if e != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		projects = rows
 	}
-	projects, err := findMany(c.Request().Context(), colProjects, q, bson.M{"_id": 0}, nil, 500)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -112,18 +130,18 @@ func createProject(c echo.Context) error {
 		status = *b.Status
 	}
 	projectID := newID("prj")
-	doc := bson.M{
+	doc := map[string]any{
 		"project_id": projectID, "org_id": orgID,
 		"name": b.Name, "key": strings.ToUpper(b.Key),
 		"description": b.Description, "color": b.Color,
 		"status":     status,
 		"created_by": user["user_id"], "created_at": isoNow(),
 	}
-	if err := insertDoc(ctx, colProjects, doc); err != nil {
+	if err := pgInsert(ctx, "projects", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	_ = insertDoc(ctx, colProjMem, bson.M{
-		"org_id": orgID, "project_id": projectID, "user_id": user["user_id"],
+	_ = pgInsert(ctx, "project_members", map[string]any{
+		"project_member_id": newID("pmem"), "org_id": orgID, "project_id": projectID, "user_id": user["user_id"],
 		"role": "lead", "added_at": isoNow(), "added_by": user["user_id"],
 	})
 	return c.JSON(http.StatusOK, doc)
@@ -150,7 +168,7 @@ func updateProject(c echo.Context) error {
 	if b.Status != nil && !vStatus(*b.Status, projectStatuses) {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
-	updates := bson.M{}
+	updates := map[string]any{}
 	if b.Name != nil {
 		updates["name"] = *b.Name
 	}
@@ -167,16 +185,15 @@ func updateProject(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "No fields to update")
 	}
 	ctx := c.Request().Context()
-	res, err := colProjects.UpdateOne(ctx, bson.M{"project_id": projectID, "org_id": orgID}, bson.M{"$set": updates})
+	if err := pgUpdate(ctx, "projects", map[string]any{"project_id": projectID, "org_id": orgID}, updates); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	updated, err := pgFindOne(ctx, "projects", map[string]any{"project_id": projectID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	if res.MatchedCount == 0 {
+	if updated == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Project not found")
-	}
-	updated, err := findOne(ctx, colProjects, bson.M{"project_id": projectID}, bson.M{"_id": 0})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	return c.JSON(http.StatusOK, updated)
 }
@@ -196,7 +213,7 @@ func deleteProject(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Only owner or admin can delete projects")
 	}
 	ctx := c.Request().Context()
-	project, err := findOne(ctx, colProjects, bson.M{"project_id": projectID, "org_id": orgID}, bson.M{"_id": 0})
+	project, err := pgFindOne(ctx, "projects", map[string]any{"project_id": projectID, "org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -204,8 +221,7 @@ func deleteProject(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Project not found")
 	}
 	// Cascade: collect task ids, then delete children
-	tasks, err := findMany(ctx, colTasks, bson.M{"org_id": orgID, "project_id": projectID},
-		bson.M{"_id": 0, "task_id": 1}, nil, 0)
+	tasks, err := pgFindMany(ctx, "tasks", map[string]any{"org_id": orgID, "project_id": projectID}, []string{"task_id"}, "", 0)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -213,17 +229,25 @@ func deleteProject(c echo.Context) error {
 	for _, t := range tasks {
 		taskIDs = append(taskIDs, asStr(t["task_id"]))
 	}
-	_, _ = colTasks.DeleteMany(ctx, bson.M{"org_id": orgID, "project_id": projectID})
-	_, _ = colSprints.DeleteMany(ctx, bson.M{"org_id": orgID, "project_id": projectID})
-	_, _ = colProjMem.DeleteMany(ctx, bson.M{"org_id": orgID, "project_id": projectID})
+	_ = pgDelete(ctx, "tasks", map[string]any{"org_id": orgID, "project_id": projectID})
+	_ = pgDelete(ctx, "sprints", map[string]any{"org_id": orgID, "project_id": projectID})
+	_ = pgDelete(ctx, "project_members", map[string]any{"org_id": orgID, "project_id": projectID})
 	if len(taskIDs) > 0 {
-		in := bson.M{"$in": taskIDs}
-		_, _ = colEntries.DeleteMany(ctx, bson.M{"org_id": orgID, "task_id": in})
-		_, _ = colComments.DeleteMany(ctx, bson.M{"org_id": orgID, "task_id": in})
-		_, _ = colTimers.DeleteMany(ctx, bson.M{"org_id": orgID, "task_id": in})
+		placeholders := make([]string, len(taskIDs))
+		args := []any{orgID}
+		for i, id := range taskIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args = append(args, id)
+		}
+		q := fmt.Sprintf("DELETE FROM time_entries WHERE org_id = $1 AND task_id IN (%s)", strings.Join(placeholders, ","))
+		_, _ = pgExecRaw(ctx, q, args...)
+		q = fmt.Sprintf("DELETE FROM comments WHERE org_id = $1 AND task_id IN (%s)", strings.Join(placeholders, ","))
+		_, _ = pgExecRaw(ctx, q, args...)
+		q = fmt.Sprintf("DELETE FROM active_timers WHERE org_id = $1 AND task_id IN (%s)", strings.Join(placeholders, ","))
+		_, _ = pgExecRaw(ctx, q, args...)
 	}
-	_, _ = colProjects.DeleteOne(ctx, bson.M{"project_id": projectID, "org_id": orgID})
-	return c.JSON(http.StatusOK, bson.M{"ok": true, "deleted_tasks": len(taskIDs)})
+	_ = pgDelete(ctx, "projects", map[string]any{"project_id": projectID, "org_id": orgID})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "deleted_tasks": len(taskIDs)})
 }
 
 // ---- project members ----
@@ -239,7 +263,7 @@ func listProjectMembers(c echo.Context) error {
 		return herr
 	}
 	ctx := c.Request().Context()
-	members, err := findMany(ctx, colProjMem, bson.M{"org_id": orgID, "project_id": projectID}, bson.M{"_id": 0}, nil, 500)
+	members, err := pgFindMany(ctx, "project_members", map[string]any{"org_id": orgID, "project_id": projectID}, nil, "", 500)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -247,31 +271,27 @@ func listProjectMembers(c echo.Context) error {
 	for _, m := range members {
 		userIDs = append(userIDs, asStr(m["user_id"]))
 	}
-	umap := map[string]bson.M{}
+	umap := map[string]map[string]any{}
 	for _, uid := range userIDs {
 		u, err := pgFindOne(ctx, "users", map[string]any{"user_id": uid}, []string{"user_id", "email", "name", "picture", "created_at"})
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 		}
 		if u != nil {
-			bm := bson.M{}
-			for k, v := range u {
-				bm[k] = v
-			}
-			umap[uid] = bm
+			umap[uid] = u
 		}
 	}
-	out := make([]bson.M, 0, len(members))
+	out := make([]map[string]any, 0, len(members))
 	for _, m := range members {
 		u := umap[asStr(m["user_id"])]
 		if u == nil {
-			u = bson.M{}
+			u = map[string]any{}
 		}
-		row := bson.M{}
+		row := map[string]any{}
 		for k, v := range u {
 			row[k] = v
 		}
-		role := bsonStr(m, "role", "member")
+		role := mapStr(m, "role", "member")
 		row["project_role"] = role
 		row["added_at"] = m["added_at"]
 		out = append(out, row)
@@ -308,7 +328,7 @@ func addProjectMember(c echo.Context) error {
 	if target == nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "User is not a member of the organization")
 	}
-	existing, err := findOne(ctx, colProjMem, bson.M{"org_id": orgID, "project_id": projectID, "user_id": b.UserID}, nil)
+	existing, err := pgFindOne(ctx, "project_members", map[string]any{"org_id": orgID, "project_id": projectID, "user_id": b.UserID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -319,13 +339,13 @@ func addProjectMember(c echo.Context) error {
 	if b.Role != nil && *b.Role != "" {
 		role = *b.Role
 	}
-	if err := insertDoc(ctx, colProjMem, bson.M{
-		"org_id": orgID, "project_id": projectID, "user_id": b.UserID,
+	if err := pgInsert(ctx, "project_members", map[string]any{
+		"project_member_id": newID("pmem"), "org_id": orgID, "project_id": projectID, "user_id": b.UserID,
 		"role": role, "added_at": isoNow(), "added_by": user["user_id"],
 	}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	return c.JSON(http.StatusOK, bson.M{"ok": true})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
 func removeProjectMember(c echo.Context) error {
@@ -343,12 +363,9 @@ func removeProjectMember(c echo.Context) error {
 	if !roleIs(m, "owner", "admin", "manager") {
 		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
 	}
-	_, err := colProjMem.DeleteOne(c.Request().Context(),
-		bson.M{"org_id": orgID, "project_id": projectID, "user_id": targetUserID})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
-	}
-	return c.JSON(http.StatusOK, bson.M{"ok": true})
+	_ = pgDelete(c.Request().Context(), "project_members",
+		map[string]any{"org_id": orgID, "project_id": projectID, "user_id": targetUserID})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---- sprints ----
@@ -367,10 +384,8 @@ func listSprints(c echo.Context) error {
 	if herr != nil {
 		return herr
 	}
-	q := bson.M{"org_id": orgID}
-	if !all {
-		q["project_id"] = bson.M{"$in": allowed}
-	}
+	ctx := c.Request().Context()
+	filter := map[string]any{"org_id": orgID}
 	projectID := c.QueryParam("project_id")
 	if projectID != "" {
 		// further narrow, still respecting ACL
@@ -383,17 +398,37 @@ func listSprints(c echo.Context) error {
 				}
 			}
 			if !found {
-				return c.JSON(http.StatusOK, []bson.M{})
+				return c.JSON(http.StatusOK, []map[string]any{})
 			}
 		}
-		q["project_id"] = projectID
+		filter["project_id"] = projectID
 	}
 	status := c.QueryParam("status")
 	if status != "" {
-		q["status"] = status
+		filter["status"] = status
 	}
-	sprints, err := findMany(c.Request().Context(), colSprints, q, bson.M{"_id": 0},
-		bson.D{{Key: "created_at", Value: -1}}, 500)
+	var sprints []map[string]any
+	var err error
+	if all || projectID != "" {
+		sprints, err = pgFindMany(ctx, "sprints", filter, nil, "created_at DESC", 500)
+	} else {
+		if len(allowed) == 0 {
+			return c.JSON(http.StatusOK, []map[string]any{})
+		}
+		placeholders := make([]string, len(allowed))
+		args := []any{orgID}
+		for i, id := range allowed {
+			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			args = append(args, id)
+		}
+		q := fmt.Sprintf("SELECT * FROM sprints WHERE org_id = $1 AND project_id IN (%s) ORDER BY created_at DESC LIMIT 500",
+			strings.Join(placeholders, ","))
+		rows, e := pgExecQuery(ctx, q, args...)
+		if e != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+		}
+		sprints = rows
+	}
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -420,13 +455,13 @@ func createSprint(c echo.Context) error {
 	if !roleIs(m, "owner", "admin", "manager") {
 		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
 	}
-	doc := bson.M{
+	doc := map[string]any{
 		"sprint_id": newID("spr"), "org_id": orgID, "project_id": b.ProjectID,
 		"name": b.Name, "goal": b.Goal,
 		"start_date": b.StartDate, "end_date": b.EndDate,
 		"status": "planned", "created_at": isoNow(),
 	}
-	if err := insertDoc(c.Request().Context(), colSprints, doc); err != nil {
+	if err := pgInsert(c.Request().Context(), "sprints", doc); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 	return c.JSON(http.StatusOK, doc)
@@ -440,7 +475,7 @@ func updateSprint(c echo.Context) error {
 	orgID := c.Param("org_id")
 	sprintID := c.Param("sprint_id")
 	ctx := c.Request().Context()
-	sprint, err := findOne(ctx, colSprints, bson.M{"sprint_id": sprintID, "org_id": orgID}, nil)
+	sprint, err := pgFindOne(ctx, "sprints", map[string]any{"sprint_id": sprintID, "org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -461,7 +496,7 @@ func updateSprint(c echo.Context) error {
 	if b.Status != nil && !vStatus(*b.Status, sprintStatuses) {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
-	updates := bson.M{}
+	updates := map[string]any{}
 	if b.Name != nil {
 		updates["name"] = *b.Name
 	}
@@ -480,10 +515,10 @@ func updateSprint(c echo.Context) error {
 	if len(updates) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "No fields to update")
 	}
-	if _, err := colSprints.UpdateOne(ctx, bson.M{"sprint_id": sprintID, "org_id": orgID}, bson.M{"$set": updates}); err != nil {
+	if err := pgUpdate(ctx, "sprints", map[string]any{"sprint_id": sprintID, "org_id": orgID}, updates); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	updated, err := findOne(ctx, colSprints, bson.M{"sprint_id": sprintID, "org_id": orgID}, bson.M{"_id": 0})
+	updated, err := pgFindOne(ctx, "sprints", map[string]any{"sprint_id": sprintID, "org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -498,7 +533,7 @@ func deleteSprint(c echo.Context) error {
 	orgID := c.Param("org_id")
 	sprintID := c.Param("sprint_id")
 	ctx := c.Request().Context()
-	sprint, err := findOne(ctx, colSprints, bson.M{"sprint_id": sprintID, "org_id": orgID}, nil)
+	sprint, err := pgFindOne(ctx, "sprints", map[string]any{"sprint_id": sprintID, "org_id": orgID}, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
@@ -512,9 +547,9 @@ func deleteSprint(c echo.Context) error {
 	if !roleIs(m, "owner", "admin", "manager") {
 		return echo.NewHTTPError(http.StatusForbidden, "Requires manager or higher role")
 	}
-	_, _ = colTasks.UpdateMany(ctx,
-		bson.M{"org_id": orgID, "sprint_id": sprintID},
-		bson.M{"$set": bson.M{"sprint_id": nil, "former_sprint_name": sprint["name"]}})
-	_, _ = colSprints.DeleteOne(ctx, bson.M{"sprint_id": sprintID, "org_id": orgID})
-	return c.JSON(http.StatusOK, bson.M{"ok": true})
+	_ = pgUpdate(ctx, "tasks",
+		map[string]any{"org_id": orgID, "sprint_id": sprintID},
+		map[string]any{"sprint_id": nil, "former_sprint_name": sprint["name"]})
+	_ = pgDelete(ctx, "sprints", map[string]any{"sprint_id": sprintID, "org_id": orgID})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true})
 }

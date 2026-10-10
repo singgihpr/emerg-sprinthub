@@ -3,47 +3,7 @@ package main
 import (
 	"context"
 	"log"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
-
-func initIndexes(ctx context.Context) error {
-	index := func(col *mongo.Collection, model mongo.IndexModel) error {
-		_, err := col.Indexes().CreateOne(ctx, model)
-		return err
-	}
-	unique := func(keys interface{}) mongo.IndexModel {
-		return mongo.IndexModel{Keys: keys, Options: options.Index().SetUnique(true)}
-	}
-	steps := []struct {
-		col   *mongo.Collection
-		model mongo.IndexModel
-	}{
-		{colUsers, unique(bson.M{"email": 1})},
-		{colUsers, unique(bson.M{"user_id": 1})},
-		{colOrgs, unique(bson.M{"org_id": 1})},
-		{colMembers, unique(bson.D{{Key: "org_id", Value: 1}, {Key: "user_id", Value: 1}})},
-		{colProjects, unique(bson.M{"project_id": 1})},
-		{colTasks, unique(bson.M{"task_id": 1})},
-		{colTasks, mongo.IndexModel{Keys: bson.M{"org_id": 1}}},
-		{colSprints, unique(bson.M{"sprint_id": 1})},
-		{colEntries, unique(bson.M{"entry_id": 1})},
-		{colInvites, unique(bson.M{"invite_id": 1})},
-		// TTL: Mongo deletes expired invites
-		{colInvites, mongo.IndexModel{Keys: bson.M{"expires_at": 1}, Options: options.Index().SetExpireAfterSeconds(0)}},
-		{colRefresh, unique(bson.M{"token_hash": 1})},
-		// TTL: Mongo deletes expired refresh tokens
-		{colRefresh, mongo.IndexModel{Keys: bson.M{"expires_at": 1}, Options: options.Index().SetExpireAfterSeconds(0)}},
-	}
-	for _, s := range steps {
-		if err := index(s.col, s.model); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func seed(ctx context.Context) {
 	if !cfg.SeedDemo {
@@ -81,19 +41,19 @@ func seed(ctx context.Context) {
 		})
 		// Seed a demo project + sprint + tasks
 		prjID := newID("prj")
-		_ = insertDoc(ctx, colProjects, bson.M{
+		_ = pgPoolInsert(ctx, "projects", map[string]any{
 			"project_id": prjID, "org_id": orgID,
 			"name": "Web Redesign", "key": "WEB",
 			"description": "Company website redesign project",
 			"color":       "#4F46E5", "status": "active", "created_by": userID,
 			"created_at": isoNow(),
 		})
-		_ = insertDoc(ctx, colProjMem, bson.M{
-			"org_id": orgID, "project_id": prjID, "user_id": userID,
+		_ = pgPoolInsert(ctx, "project_members", map[string]any{
+			"project_member_id": newID("pmem"), "org_id": orgID, "project_id": prjID, "user_id": userID,
 			"role": "lead", "added_at": isoNow(), "added_by": userID,
 		})
 		sprID := newID("spr")
-		_ = insertDoc(ctx, colSprints, bson.M{
+		_ = pgPoolInsert(ctx, "sprints", map[string]any{
 			"sprint_id": sprID, "org_id": orgID, "project_id": prjID,
 			"name": "Sprint 1", "goal": "Launch new landing page",
 			"start_date": todayUTC(),
@@ -119,7 +79,7 @@ func seed(ctx context.Context) {
 			if st.status == "done" {
 				logged = 60
 			}
-			_ = insertDoc(ctx, colTasks, bson.M{
+			_ = pgPoolInsert(ctx, "tasks", map[string]any{
 				"task_id": newID("tsk"), "org_id": orgID, "project_id": prjID,
 				"title": st.title, "description": "", "status": st.status,
 				"priority": st.prio, "type": "task", "assignee_id": userID,
@@ -145,27 +105,27 @@ func seed(ctx context.Context) {
 // backfill: ensure every project has its creator as a project_member
 // (idempotent), and default status. Runs regardless of SEED_DEMO.
 func backfill(ctx context.Context) {
-	allProjects, err := findMany(ctx, colProjects, bson.M{}, bson.M{"_id": 0}, nil, 5000)
+	allProjects, err := pgPoolFind(ctx, "projects", map[string]any{})
 	if err != nil {
 		log.Fatalf("backfill failed: %v", err)
 	}
 	for _, p := range allProjects {
 		if asStr(p["status"]) == "" {
-			_, _ = colProjects.UpdateOne(ctx, bson.M{"project_id": p["project_id"]},
-				bson.M{"$set": bson.M{"status": "active"}})
+			_ = pgPoolUpdate(ctx, "projects", map[string]any{"project_id": p["project_id"]},
+				map[string]any{"status": "active"})
 		}
 		createdBy := asStr(p["created_by"])
 		if createdBy == "" {
 			continue
 		}
-		exists, err := findOne(ctx, colProjMem, bson.M{
+		exists, err := pgPoolFindOne(ctx, "project_members", map[string]any{
 			"org_id": p["org_id"], "project_id": p["project_id"], "user_id": createdBy,
-		}, nil)
+		})
 		if err != nil || exists != nil {
 			continue
 		}
-		_ = insertDoc(ctx, colProjMem, bson.M{
-			"org_id": p["org_id"], "project_id": p["project_id"], "user_id": createdBy,
+		_ = pgPoolInsert(ctx, "project_members", map[string]any{
+			"project_member_id": newID("pmem"), "org_id": p["org_id"], "project_id": p["project_id"], "user_id": createdBy,
 			"role": "lead", "added_at": isoNow(), "added_by": createdBy,
 		})
 	}

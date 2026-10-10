@@ -16,7 +16,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 type config struct {
@@ -66,11 +65,11 @@ func loadConfig() {
 	}
 	cfg.RateLimitOff = get("RATE_LIMIT", "") == "off"
 	cfg.SeedDemo = get("SEED_DEMO", "true") == "true"
-	if cfg.MongoURL == "" || cfg.DBName == "" || cfg.JWTSecret == "" {
-		log.Fatal("MONGO_URL, DB_NAME and JWT_SECRET must be set")
+	if cfg.JWTSecret == "" {
+		log.Fatal("JWT_SECRET must be set")
 	}
 	if cfg.DatabaseURL == "" {
-		log.Println("DATABASE_URL not set; Postgres features disabled")
+		log.Fatal("DATABASE_URL must be set")
 	}
 	if v := os.Getenv("SMTP_PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
@@ -89,24 +88,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := connectDB(ctx, cfg.MongoURL, cfg.DBName); err != nil {
-		log.Fatalf("mongo connect failed: %v", err)
-	}
-	defer func() {
-		dctx, dcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer dcancel()
-		if err := mongoClient.Disconnect(dctx); err != nil {
-			log.Println("mongo disconnect:", err)
-		}
-	}()
 	if err := connectPostgres(ctx, cfg.DatabaseURL); err != nil {
 		log.Fatalf("postgres connect failed: %v", err)
 	}
 	defer closePostgres()
 
-	if err := initIndexes(ctx); err != nil {
-		log.Fatalf("index creation failed: %v", err)
-	}
 	seed(ctx)
 	go startScheduler()
 
@@ -124,7 +110,7 @@ func newApp() *echo.Echo {
 	e.Use(authRateLimit)
 	e.Use(pgTxMiddleware)
 
-	e.GET("/healthz", func(c echo.Context) error { return c.JSON(http.StatusOK, bson.M{"ok": true}) })
+	e.GET("/healthz", func(c echo.Context) error { return c.JSON(http.StatusOK, map[string]any{"ok": true}) })
 
 	api := e.Group("/api")
 	api.POST("/auth/register", register)
@@ -203,7 +189,7 @@ func httpErrorHandler(err error, c echo.Context) {
 		log.Println("request error:", err)
 	}
 	if !c.Response().Committed {
-		_ = c.JSON(code, bson.M{"detail": detail})
+		_ = c.JSON(code, map[string]any{"detail": detail})
 	}
 }
 

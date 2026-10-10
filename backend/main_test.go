@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -24,7 +25,6 @@ var testSrv *httptest.Server
 
 func TestMain(m *testing.M) {
 	cfg = config{
-		MongoURL: "mongodb://127.0.0.1:27017", DBName: "sprinthub_gotest",
 		DatabaseURL: getTestDatabaseURL(),
 		JWTSecret:   "test-secret", EmailFromName: "SprintHub",
 		EmailFrom: "no-reply@localhost",
@@ -32,16 +32,7 @@ func TestMain(m *testing.M) {
 		RateLimitOff:   true,
 	}
 	jwtSecret = []byte(cfg.JWTSecret)
-	ctx := mongoCtx()
-	if err := connectDB(ctx, cfg.MongoURL, cfg.DBName); err != nil {
-		fmt.Println("mongo required for tests:", err)
-		os.Exit(1)
-	}
-	_ = db.Drop(ctx)
-	if err := initIndexes(ctx); err != nil {
-		fmt.Println("indexes failed:", err)
-		os.Exit(1)
-	}
+	ctx := context.Background()
 	if err := connectPostgres(ctx, cfg.DatabaseURL); err != nil {
 		fmt.Println("postgres required for tests:", err)
 		os.Exit(1)
@@ -57,7 +48,6 @@ func TestMain(m *testing.M) {
 	testSrv = httptest.NewServer(newApp())
 	code := m.Run()
 	testSrv.Close()
-	_ = db.Drop(mongoCtx())
 	closePostgres()
 	os.Exit(code)
 }
@@ -384,7 +374,7 @@ func TestInviteAcceptFlow(t *testing.T) {
 		t.Fatalf("invite new user: %d %v", code, inv)
 	}
 	// verify the invite was stored in postgres
-	invDoc, err := pgPoolFindOne(mongoCtx(), "invites", map[string]any{"email": "newbie@test.dev"})
+	invDoc, err := pgPoolFindOne(context.Background(), "invites", map[string]any{"email": "newbie@test.dev"})
 	if err != nil || invDoc == nil {
 		t.Fatalf("invite not stored: %v", err)
 	}

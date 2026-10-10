@@ -487,3 +487,40 @@ func pgCount(ctx context.Context, table string, filter map[string]any) (int64, e
 	}
 	return n, nil
 }
+
+// pgExecQuery runs a custom SELECT query and returns []map[string]any.
+func pgExecQuery(ctx context.Context, sql string, args ...any) ([]map[string]any, error) {
+	tx, err := pgTxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRowsToMaps(rows)
+}
+
+// pgExecRaw runs arbitrary SQL (DELETE/UPDATE with IN clauses) and returns rows affected.
+func pgExecRaw(ctx context.Context, sql string, args ...any) (int64, error) {
+	tx, err := pgTxFromContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, sql, args...)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// mapStr gets a string value from a map with a default fallback.
+func mapStr(m map[string]any, key, def string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return def
+}

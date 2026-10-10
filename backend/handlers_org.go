@@ -323,7 +323,7 @@ func inviteMember(c echo.Context) error {
 	}
 	if existing != nil {
 		targetID = asStr(existing["user_id"])
-		name = bsonStr(existing, "name", b.Name)
+		name = mapStrDefault(existing, "name", b.Name)
 		needsPassword = asStr(existing["password_hash"]) == "" && asStr(existing["auth_provider"]) != "google"
 	} else {
 		targetID = newID("user")
@@ -365,7 +365,7 @@ func inviteMember(c echo.Context) error {
 	if token != "" && !strings.HasPrefix(cfg.AppBaseURL, "https://") {
 		log.Printf("APP_BASE_URL must be https:// to email invite links (got %q); invite email skipped", cfg.AppBaseURL)
 	} else {
-		inviter := bsonStr(user, "name", bsonStr(user, "email", "An admin"))
+		inviter := mapStrDefault(user, "name", mapStrDefault(user, "email", "An admin"))
 		subject, htmlBody := inviteEmail(name, inviter, orgName, token)
 		go func(to, subject, html string) { _, _ = sendEmail(to, subject, html) }(email, subject, htmlBody)
 	}
@@ -390,7 +390,7 @@ func getInvite(c echo.Context) error {
 	if org != nil {
 		orgName = asStr(org["name"])
 	}
-	role := bsonStr(inv, "role", "member")
+	role := mapStrDefault(inv, "role", "member")
 	return c.JSON(http.StatusOK, map[string]any{
 		"email": inv["email"], "name": inv["name"],
 		"org_name": orgName, "role": role,

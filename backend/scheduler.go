@@ -1,9 +1,8 @@
 package main
 
 import (
+	"context"
 	"time"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // Built-in scheduler replacing .emergent/crons.yml: weekly-digest Mondays
@@ -47,12 +46,12 @@ func nextDailySpawn(now time.Time) time.Time {
 // does not double-send the digest.
 func fireCron(name string, work func()) {
 	runID := name + "-" + todayUTC()
-	ctx := mongoCtx()
-	dup, err := findOne(ctx, colCronRuns, bson.M{"run_id": runID}, nil)
+	ctx := context.Background()
+	dup, err := pgPoolFindOne(ctx, "cron_runs", map[string]any{"run_id": runID})
 	if err != nil || dup != nil {
 		return
 	}
-	if err := insertDoc(ctx, colCronRuns, bson.M{"run_id": runID, "at": isoNow(), "name": name}); err != nil {
+	if err := pgPoolInsert(ctx, "cron_runs", map[string]any{"run_id": runID, "name": name}); err != nil {
 		return
 	}
 	work()

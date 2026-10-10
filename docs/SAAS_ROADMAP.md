@@ -12,14 +12,16 @@ Branch: `feat/saas-postgres-rls`
 - **Frontend 401 refresh**: axios interceptor retries once through `/api/auth/refresh` after a 401.
 - **Tests**: refresh rotation/revocation, CORS allowlist, password policy, rate limit.
 
-## Done: P1 chunk 1 — auth + orgs/memberships/invites on Postgres + RLS
+## Done: P1 — Full Postgres migration + RLS
 
-- **Per-request Postgres transaction middleware** (`pgTxMiddleware`) sets `app.current_user` and `app.current_org` so RLS policies fire.
-- **Map-shaped query helpers** (`pgFindOne`, `pgFindMany`, `pgInsert`, `pgUpdate`, `pgDelete`) plus background variants for seed/cron.
-- **Migrated to Postgres**: `users`, `refresh_tokens`, `organizations`, `memberships`, `invites`.
-- **Still on Mongo**: `projects`, `project_members`, `sprints`, `tasks`, `recurring_tasks`, `time_entries`, `active_timers`, `comments`, `cron_runs`.
-- **Seed** now writes admin/demo org/membership to Postgres; demo project/sprint/tasks still Mongo.
-- **Tests** run against both ephemeral Postgres and Mongo; `getTestDatabaseURL()` reads `DATABASE_URL` or defaults to `localhost:5432`.
+- **Per-request Postgres transaction middleware** (`pgTxMiddleware`) sets `app.current_user` and `app.current_org` so RLS policies fire on all tables.
+- **Map-shaped query helpers** (`pgFindOne`, `pgFindMany`, `pgInsert`, `pgUpdate`, `pgDelete`) plus `pgExecQuery`/`pgExecRaw` for custom queries with IN clauses.
+- **Background variants** (`pgPoolFind`, `pgPoolFindOne`, `pgPoolInsert`, `pgPoolUpdate`) for seed/cron/email jobs.
+- **All entities on Postgres**: `users`, `refresh_tokens`, `organizations`, `memberships`, `invites`, `projects`, `project_members`, `sprints`, `tasks`, `recurring_tasks`, `time_entries`, `active_timers`, `comments`, `cron_runs`.
+- **Mongo removed**: All Mongo connections, collections, helpers, and the `go.mongodb.org/mongo-driver` dependency removed.
+- **Schema**: `tasks` table has `recurring_id`, `repeat`, `former_sprint_name` columns.
+- **Seed** writes admin/demo org/membership/project/sprint/tasks to Postgres.
+- **Tests** run against Postgres only; no Mongo dependency.
 
 ## Verified
 
@@ -29,19 +31,7 @@ go vet ./...        # clean
 go test ./...       # 13 passed
 ```
 
-## Next: P1 chunk 2 — migrate remaining entities
-
-1. `projects` + `project_members`
-2. `sprints`
-3. `tasks` + `recurring_tasks`
-4. `time_entries` + `active_timers`
-5. `comments` + analytics aggregations
-6. `cron_runs`
-7. Then remove Mongo connection, `initIndexes`, seed demo Mongo data, and the `mongo` docker-compose service.
-
-P1 is the big lift; it is also the data-layer rewrite the codebase already needs for SaaS.
-
-## Then: P2 / P3 — SaaS business + enterprise
+## Next: P2 / P3 — SaaS business + enterprise
 
 - Stripe plans + per-tenant quotas/metering.
 - SSO / SAML via WorkOS (buy, don't build).
