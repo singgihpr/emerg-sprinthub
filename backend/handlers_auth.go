@@ -13,7 +13,7 @@ func register(c echo.Context) error {
 	if err := bindBody(c, &b); err != nil {
 		return err
 	}
-	if b.Email == "" || b.Password == "" || b.Name == "" || !vEmail(b.Email) {
+	if b.Email == "" || b.Password == "" || b.Name == "" || !vEmail(b.Email) || !vPassword(b.Password) {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "Validation error")
 	}
 	ctx := c.Request().Context()
@@ -45,6 +45,7 @@ func register(c echo.Context) error {
 	})
 	token := createAccessToken(userID, email)
 	setAuthCookie(c, token)
+	setRefreshCookie(c, issueRefreshToken(ctx, userID))
 	return c.JSON(http.StatusOK, bson.M{"user_id": userID, "email": email, "name": b.Name, "token": token})
 }
 
@@ -67,14 +68,59 @@ func login(c echo.Context) error {
 	}
 	token := createAccessToken(asStr(user["user_id"]), email)
 	setAuthCookie(c, token)
+	setRefreshCookie(c, issueRefreshToken(ctx, asStr(user["user_id"])))
 	return c.JSON(http.StatusOK, bson.M{
 		"user_id": user["user_id"], "email": email,
 		"name": user["name"], "picture": user["picture"], "token": token,
 	})
 }
 
+// refresh rotates the refresh cookie (consume + reissue) and returns a fresh
+// access token. Body may carry {"refresh_token": "..."} for non-cookie clients.
+func refresh(c echo.Context) error {
+	raw := ""
+	if ck, err := c.Request().Cookie("refresh_token"); err == nil {
+		raw = ck.Value
+	}
+	if raw == "" {
+		var b struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		_ = c.Bind(&b)
+		raw = b.RefreshToken
+	}
+	if raw == "" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Missing refresh token")
+	}
+	ctx := c.Request().Context()
+	userID := consumeRefreshToken(ctx, raw)
+	if userID == "" {
+		clearRefreshCookie(c)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired refresh token")
+	}
+	user, err := findOne(ctx, colUsers, bson.M{"user_id": userID}, bson.M{"_id": 0, "password_hash": 0})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+	}
+	if user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
+	token := createAccessToken(userID, asStr(user["email"]))
+	setAuthCookie(c, token)
+	setRefreshCookie(c, issueRefreshToken(ctx, userID))
+	return c.JSON(http.StatusOK, bson.M{
+		"user_id": user["user_id"], "email": user["email"],
+		"name": user["name"], "picture": user["picture"], "token": token,
+	})
+}
+
 func logout(c echo.Context) error {
+	if ck, err := c.Request().Cookie("refresh_token"); err == nil && ck.Value != "" {
+		// consume = revoke this session's refresh token
+		_ = consumeRefreshToken(c.Request().Context(), ck.Value)
+	}
 	clearAuthCookie(c)
+	clearRefreshCookie(c)
 	return c.JSON(http.StatusOK, bson.M{"ok": true})
 }
 
@@ -145,5 +191,10 @@ func changePassword(c echo.Context) error {
 		bson.M{"$set": bson.M{"password_hash": hashPassword(b.NewPassword)}}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
-	return c.JSON(http.StatusOK, bson.M{"ok": true})
+	// revoke every session, then reissue for this one so the user stays logged in
+	revokeAllRefreshTokens(ctx, asStr(user["user_id"]))
+	token := createAccessToken(asStr(user["user_id"]), asStr(user["email"]))
+	setAuthCookie(c, token)
+	setRefreshCookie(c, issueRefreshToken(ctx, asStr(user["user_id"])))
+	return c.JSON(http.StatusOK, bson.M{"ok": true, "token": token})
 }

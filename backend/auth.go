@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -13,6 +17,12 @@ import (
 
 var jwtSecret []byte
 
+// access tokens are short-lived; long-lived sessions ride the refresh cookie.
+const (
+	accessTokenTTL  = 15 * time.Minute
+	refreshTokenTTL = 30 * 24 * time.Hour
+)
+
 // createAccessToken matches python's JWT payload exactly so existing tokens
 // survive the migration.
 func createAccessToken(userID, email string) string {
@@ -20,10 +30,66 @@ func createAccessToken(userID, email string) string {
 		"sub":   userID,
 		"email": email,
 		"type":  "access",
-		"exp":   nowUTC().Add(7 * 24 * time.Hour).Unix(),
+		"exp":   nowUTC().Add(accessTokenTTL).Unix(),
 	}
 	t, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
 	return t
+}
+
+// ---- refresh tokens: opaque random secrets, stored hashed, rotated on use ----
+
+func hashRefreshToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func newRefreshSecret() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func issueRefreshToken(ctx context.Context, userID string) string {
+	raw := newRefreshSecret()
+	_ = insertDoc(ctx, colRefresh, bson.M{
+		"token_hash": hashRefreshToken(raw), "user_id": userID,
+		"expires_at": nowUTC().Add(refreshTokenTTL), "created_at": nowUTC(),
+	})
+	return raw
+}
+
+// consumeRefreshToken atomically deletes the token (rotation): a replayed
+// token is gone after the first use. Returns the user id, "" if invalid.
+func consumeRefreshToken(ctx context.Context, raw string) string {
+	var doc bson.M
+	err := colRefresh.FindOneAndDelete(ctx, bson.M{"token_hash": hashRefreshToken(raw)}).Decode(&doc)
+	if err != nil {
+		return ""
+	}
+	if nowUTC().After(expiryTime(doc["expires_at"])) {
+		return ""
+	}
+	return asStr(doc["user_id"])
+}
+
+func revokeAllRefreshTokens(ctx context.Context, userID string) {
+	_, _ = colRefresh.DeleteMany(ctx, bson.M{"user_id": userID})
+}
+
+const refreshCookiePath = "/api/auth"
+
+func setRefreshCookie(c echo.Context, raw string) {
+	c.SetCookie(&http.Cookie{
+		Name: "refresh_token", Value: raw, Path: refreshCookiePath,
+		MaxAge: 30 * 24 * 60 * 60, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+	})
+}
+
+func clearRefreshCookie(c echo.Context) {
+	c.SetCookie(&http.Cookie{
+		Name: "refresh_token", Value: "", Path: refreshCookiePath,
+		MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+	})
 }
 
 // currentUser mirrors python's get_current_user: cookie first, then Bearer.
@@ -67,7 +133,7 @@ func currentUser(c echo.Context) (bson.M, *echo.HTTPError) {
 func setAuthCookie(c echo.Context, token string) {
 	c.SetCookie(&http.Cookie{
 		Name: "access_token", Value: token, Path: "/",
-		MaxAge: 7 * 24 * 60 * 60, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+		MaxAge: int(accessTokenTTL.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
 	})
 }
 

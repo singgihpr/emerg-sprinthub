@@ -137,7 +137,7 @@ var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 
 func vEmail(s string) bool { return emailRe.MatchString(s) }
 
-func vPassword(s string) bool { return len(s) >= 6 && len(s) <= 128 }
+func vPassword(s string) bool { return len(s) >= 12 && len(s) <= 128 }
 
 var projectStatuses = map[string]bool{"planning": true, "active": true, "on_hold": true, "archived": true}
 var sprintStatuses = map[string]bool{"planned": true, "active": true, "completed": true}

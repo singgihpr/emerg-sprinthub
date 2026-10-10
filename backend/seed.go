@@ -33,6 +33,9 @@ func initIndexes(ctx context.Context) error {
 		{colInvites, unique(bson.M{"invite_id": 1})},
 		// TTL: Mongo deletes expired invites
 		{colInvites, mongo.IndexModel{Keys: bson.M{"expires_at": 1}, Options: options.Index().SetExpireAfterSeconds(0)}},
+		{colRefresh, unique(bson.M{"token_hash": 1})},
+		// TTL: Mongo deletes expired refresh tokens
+		{colRefresh, mongo.IndexModel{Keys: bson.M{"expires_at": 1}, Options: options.Index().SetExpireAfterSeconds(0)}},
 	}
 	for _, s := range steps {
 		if err := index(s.col, s.model); err != nil {
@@ -43,6 +46,11 @@ func initIndexes(ctx context.Context) error {
 }
 
 func seed(ctx context.Context) {
+	if !cfg.SeedDemo {
+		log.Println("SEED_DEMO=false: skipping admin/demo seed (backfill only)")
+		backfill(ctx)
+		return
+	}
 	adminEmail := cfg.AdminEmail
 	adminPassword := cfg.AdminPassword
 	if adminEmail == "" {
@@ -130,7 +138,13 @@ func seed(ctx context.Context) {
 		_, _ = colUsers.UpdateOne(ctx, bson.M{"email": adminEmail},
 			bson.M{"$set": bson.M{"password_hash": hashPassword(adminPassword)}})
 	}
-	// Backfill: ensure every project has its creator as a project_member (idempotent), and default status
+	backfill(ctx)
+	log.Println("Startup complete")
+}
+
+// backfill: ensure every project has its creator as a project_member
+// (idempotent), and default status. Runs regardless of SEED_DEMO.
+func backfill(ctx context.Context) {
 	allProjects, err := findMany(ctx, colProjects, bson.M{}, bson.M{"_id": 0}, nil, 5000)
 	if err != nil {
 		log.Fatalf("backfill failed: %v", err)
@@ -155,5 +169,4 @@ func seed(ctx context.Context) {
 			"role": "lead", "added_at": isoNow(), "added_by": createdBy,
 		})
 	}
-	log.Println("Startup complete")
 }

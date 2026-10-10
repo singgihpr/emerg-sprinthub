@@ -32,6 +32,7 @@ var (
 	colComments  *mongo.Collection
 	colInvites   *mongo.Collection
 	colCronRuns  *mongo.Collection
+	colRefresh   *mongo.Collection
 )
 
 func connectDB(ctx context.Context, uri, name string) error {
@@ -57,6 +58,7 @@ func connectDB(ctx context.Context, uri, name string) error {
 	colComments = db.Collection("comments")
 	colInvites = db.Collection("invites")
 	colCronRuns = db.Collection("cron_runs")
+	colRefresh = db.Collection("refresh_tokens")
 	return nil
 }
 

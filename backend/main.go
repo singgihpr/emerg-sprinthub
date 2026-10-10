@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -24,6 +28,9 @@ type config struct {
 	SMTPUser, SMTPPass          string
 	AppBaseURL                  string
 	WebhookCronSecret           string
+	AllowedOrigins              []string
+	RateLimitOff                bool
+	SeedDemo                    bool
 }
 
 var cfg config
@@ -47,9 +54,16 @@ func loadConfig() {
 		SMTPPort:          587,
 		SMTPUser:          get("SMTP_USER", ""),
 		SMTPPass:          get("SMTP_PASS", ""),
-		AppBaseURL:        get("APP_BASE_URL", ""),
-		WebhookCronSecret: get("WEBHOOK_CRON_SECRET", ""),
+		AppBaseURL:         get("APP_BASE_URL", ""),
+		WebhookCronSecret:  get("WEBHOOK_CRON_SECRET", ""),
 	}
+	for _, o := range strings.Split(get("ALLOWED_ORIGINS", "http://localhost:3000"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			cfg.AllowedOrigins = append(cfg.AllowedOrigins, o)
+		}
+	}
+	cfg.RateLimitOff = get("RATE_LIMIT", "") == "off"
+	cfg.SeedDemo = get("SEED_DEMO", "true") == "true"
 	if cfg.MongoURL == "" || cfg.DBName == "" || cfg.JWTSecret == "" {
 		log.Fatal("MONGO_URL, DB_NAME and JWT_SECRET must be set")
 	}
@@ -96,13 +110,16 @@ func newApp() *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = httpErrorHandler
+	e.Use(middleware.Recover())
 	e.Use(corsMiddleware)
+	e.Use(authRateLimit)
 
 	e.GET("/healthz", func(c echo.Context) error { return c.JSON(http.StatusOK, bson.M{"ok": true}) })
 
 	api := e.Group("/api")
 	api.POST("/auth/register", register)
 	api.POST("/auth/login", login)
+	api.POST("/auth/refresh", refresh)
 	api.POST("/auth/logout", logout)
 	api.GET("/auth/me", me)
 	api.PATCH("/auth/me", updateProfile)
@@ -188,13 +205,13 @@ func asHTTPError(err error, out **echo.HTTPError) bool {
 	return false
 }
 
-// corsMiddleware mirrors starlette CORSMiddleware with allow_origins=["*"],
-// allow_credentials=True: echo the request origin instead of sending "*"
-// (browsers reject credentialed wildcard responses).
+// corsMiddleware only answers for origins listed in ALLOWED_ORIGINS; other
+// origins get no CORS headers, so credentialed cross-site requests fail in
+// the browser.
 func corsMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		origin := c.Request().Header.Get("Origin")
-		if origin != "" {
+		if origin != "" && originAllowed(origin) {
 			h := c.Response().Header()
 			h.Set("Access-Control-Allow-Origin", origin)
 			h.Set("Access-Control-Allow-Credentials", "true")
@@ -203,6 +220,64 @@ func corsMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 				h.Set("Access-Control-Allow-Methods", "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT")
 				h.Set("Access-Control-Allow-Headers", "*")
 				return c.NoContent(http.StatusNoContent)
+			}
+		}
+		return next(c)
+	}
+}
+
+func originAllowed(origin string) bool {
+	for _, o := range cfg.AllowedOrigins {
+		if o == origin {
+			return true
+		}
+	}
+	return false
+}
+
+type ipWindow struct {
+	count int
+	reset time.Time
+}
+
+// authLimiter is package-level state so it survives Echo calling the
+// middleware factory on each request (observed in tests).
+type authLimiter struct {
+	mu sync.Mutex
+	ip map[string]*ipWindow
+}
+
+func (l *authLimiter) allow(host string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.ip == nil {
+		l.ip = map[string]*ipWindow{}
+	}
+	w := l.ip[host]
+	now := time.Now()
+	if w == nil || now.After(w.reset) {
+		w = &ipWindow{reset: now.Add(time.Minute)}
+		l.ip[host] = w
+	}
+	w.count++
+	return w.count <= 10
+}
+
+var authRateLimiter = &authLimiter{}
+
+// authRateLimit: fixed-window per-IP limiter on POST /api/auth/* endpoints
+// (register, login, refresh, change-password = brute-force surface).
+// ponytail: per-IP map has no eviction — fine pre-launch; swap for a ring
+// buffer or x/time/rate LRU if exposed to the public internet at scale.
+func authRateLimit(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if !cfg.RateLimitOff && c.Request().Method == http.MethodPost && strings.HasPrefix(c.Request().URL.Path, "/api/auth") {
+			host := c.Request().RemoteAddr
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+			if !authRateLimiter.allow(host) {
+				return echo.NewHTTPError(http.StatusTooManyRequests, "Too many requests, try again in a minute")
 			}
 		}
 		return next(c)
