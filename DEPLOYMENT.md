@@ -5,7 +5,7 @@ Sprint Hub runs as three containers behind one port:
 | Service | Image / build | Exposed | Notes |
 | --- | --- | --- | --- |
 | `web` | `frontend/Dockerfile` → nginx:1.27-alpine | `80` | Serves the CRA build, proxies `/api/` → `backend:8000`, SPA fallback |
-| `backend` | `backend/Dockerfile` → python:3.11-slim | internal only | `uvicorn server:app` on 8000, non-root |
+| `backend` | `backend/Dockerfile` → multi-stage golang build on alpine | internal only | backend binary on 8000, non-root |
 | `mongo` | `mongo:7` | internal only | Named volume `mongo_data` |
 
 Files that make this work: `docker-compose.yml`, `backend/Dockerfile`, `backend/.dockerignore`, `frontend/Dockerfile`, `frontend/.dockerignore`, `frontend/nginx.conf`, `.env.example`.
@@ -55,8 +55,8 @@ chmod 600 .env
 | `DB_NAME` | yes | Mongo database name |
 | `JWT_SECRET` | yes | Token signing key. Backend exits if missing. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | no | Seeded admin, defaults `widiardhana@gmail.com` / `Admin@1234` — **change these** |
-| `EMERGENT_EMAIL_KEY`, `EMAIL_FROM_NAME` | no | Transactional email; skipped with a log warning if unset |
-| `WEBHOOK_CRON_SECRET` | no | Bearer token for the two `/api/cron/*` endpoints; they 401 without it |
+| `EMAIL_FROM_NAME` | no | Display name for outgoing email |
+| `WEBHOOK_CRON_SECRET` | no | Bearer token for the two `/api/cron/*` endpoints; they 401 without it. The built-in scheduler inside the backend also runs them. |
 
 `MONGO_URL` is set by compose (`mongodb://mongo:27017`) — do not put it in `.env`.
 
@@ -74,13 +74,11 @@ First backend start seeds the admin user, an "Acme Corp" org, and sample project
 
 ```bash
 curl -I http://localhost/                          # 200, index.html
-curl -s http://localhost/api/docs -o /dev/null -w '%{http_code}\n'   # 200
+docker compose ps                                  # mongo + backend show "healthy" (backend /healthz)
 docker compose logs backend | grep -i "startup complete"
 ```
 
 Then browse to `http://VM_IP/` and log in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
-
-Google OAuth login will not work here — it validates sessions against the Emergent preview environment. Use email/password.
 
 ## 7. TLS (optional)
 
@@ -142,15 +140,10 @@ gunzip -c backup-2026-01-01.gz | docker compose exec -T mongo mongorestore --arc
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `docker compose build` fails on `npm ci` fetching `@emergentbase/visual-edits` | devDependency served from `assets.emergent.sh`; VM needs outbound HTTPS. It is unused in production builds — `npm pkg delete devDependencies.@emergentbase/visual-edits && npm install --package-lock-only` if the host stays unreachable. |
 | Frontend build killed / exit 137 | OOM. Bigger VM, or build the image on your machine and `docker save`/`docker load` it onto the VM. |
-| `backend` exits immediately, `KeyError: 'JWT_SECRET'` | `.env` missing or not readable by compose. It must sit next to `docker-compose.yml`. |
+| `backend` exits immediately, exits with "MONGO_URL, DB_NAME and JWT_SECRET must be set" | `.env` missing or not readable by compose. It must sit next to `docker-compose.yml`. |
 | `502 Bad Gateway` from nginx | backend unhealthy or still starting: `docker compose logs backend`. |
-| `413 Request Entity Too Large` on logo upload | `client_max_body_size` in `frontend/nginx.conf` is 6m; raise it if you raise `MAX_LOGO_UPLOAD` in `server.py`. |
+| `413 Request Entity Too Large` on logo upload | `client_max_body_size` in `frontend/nginx.conf` is 6m; raise it if you raise `MAX_LOGO_UPLOAD` in `handlers_org.go`. |
 | Deep link (e.g. `/tasks`) 404s after redeploy | nginx SPA fallback missing — confirm `frontend/nginx.conf` was copied into the image. |
-| Emails not sent | `EMERGENT_EMAIL_KEY` unset; backend logs `EMERGENT_EMAIL_KEY missing; skipping email send`. |
+| Emails not sent | `SMTP_HOST` unset; backend logs `No SMTP_HOST configured; skipping email send`. |
 | Reset everything | `docker compose down -v` deletes the Mongo volume. Irreversible. |
-
-## Notes on the backend image
-
-`backend/Dockerfile` installs an explicit dependency list rather than `requirements.txt`. That file pins `emergentintegrations==0.2.0`, a private Emergent.sh SDK that is not on PyPI (404) and is not imported by `server.py`, so `pip install -r requirements.txt` fails outright. It also omits `httpx` and `Pillow`, both of which `server.py` imports, and carries unused heavy packages (pandas, numpy, boto3, jq, typer, plus pytest/black/flake8/mypy). If `requirements.txt` is ever fixed, switch the Dockerfile back to `pip install --no-cache-dir -r requirements.txt`.

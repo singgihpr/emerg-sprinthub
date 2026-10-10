@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatApiErrorDetail } from "@/lib/api";
-import { GoogleLogo, Kanban, ChartLine, Timer } from "@phosphor-icons/react";
+import { Kanban, ChartLine, Timer } from "@phosphor-icons/react";
 import { Navigate } from "react-router-dom";
 
 export default function Login() {
@@ -31,12 +31,6 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const googleLogin = () => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 
   return (
@@ -89,23 +83,6 @@ export default function Login() {
             </div>
             <h2 className="font-display text-3xl font-semibold tracking-tight">Welcome back</h2>
             <p className="text-sm text-slate-500 mt-2">Sign in to your workspace or create a new one.</p>
-          </div>
-
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full h-11 gap-3 border-slate-300 hover:bg-slate-50"
-            onClick={googleLogin}
-            data-testid="google-login-btn"
-          >
-            <GoogleLogo size={20} weight="bold" />
-            <span>Continue with Google</span>
-          </Button>
-
-          <div className="flex items-center gap-3 my-6">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="text-xs uppercase tracking-widest text-slate-400">or</span>
-            <div className="flex-1 h-px bg-slate-200" />
           </div>
 
           <Tabs value={mode} onValueChange={setMode}>

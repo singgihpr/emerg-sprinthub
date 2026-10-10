@@ -1,11 +1,10 @@
 import React from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { OrgProvider } from "@/context/OrgContext";
 import { Toaster } from "@/components/ui/sonner";
 import Login from "@/pages/Login";
-import AuthCallback from "@/pages/AuthCallback";
 import AcceptInvite from "@/pages/AcceptInvite";
 import AppShell from "@/components/AppShell";
 import Dashboard from "@/pages/Dashboard";
@@ -25,8 +24,6 @@ function ProtectedRoute({ children }) {
 }
 
 function AppRoutes() {
-  const location = useLocation();
-  if (location.hash?.includes("session_id=")) return <AuthCallback />;
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
