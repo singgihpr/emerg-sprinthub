@@ -28,13 +28,26 @@ Branch: `feat/saas-postgres-rls`
 ```bash
 cd backend
 go vet ./...        # clean
-go test ./...       # 13 passed
+go test ./...       # 20 passed
 ```
+
+## Done: P4 — GDPR compliance (Indonesian PDPL, APAC, EU GDPR)
+
+- **Data export API** (`GET /api/me/export`): returns JSON with user profile, memberships, tasks (created/assigned), comments, time entries, project memberships. Complies with GDPR Article 20 (data portability).
+- **Data erasure API** (`DELETE /api/me`): deletes user and all related data via FK cascade. Blocks deletion if user owns any organization (must transfer ownership first). Complies with GDPR Article 17 (right to erasure).
+- **Frontend Privacy tab**: Profile page now has a "Privacy" tab with "Export your data" button (downloads JSON) and "Delete account" button (with confirmation dialog).
+- **Audit logging**: all GDPR actions (export, delete) logged to `audit_logs` table with IP, user agent, timestamps.
+
+## Done: P5 — SOC 2 technical controls
+
+- **Audit log table** (`audit_logs`): tracks security-relevant events (user.register, user.login, user.data_export, user.delete, etc.) with user_id, org_id, action, resource_type, resource_id, ip_address, user_agent, details (JSONB), created_at.
+- **Audit log helper** (`auditLogRequest`): extracts request metadata (IP, user agent) and writes to audit_logs. Applied to auth handlers (register, login) and GDPR handlers.
+- **Migration 000005**: creates audit_logs table with indexes on user_id, org_id, action, created_at.
 
 ## Next: P2 / P3 — SaaS business + enterprise
 
 - Stripe plans + per-tenant quotas/metering.
 - SSO / SAML via WorkOS (buy, don't build).
 - SCIM directory sync + fine-grained RBAC.
-- GDPR erasure/export API; EU-residency cluster option for whales.
+- EU-residency cluster option for whales.
 - SOC 2 process (Vanta/Drata), managed Postgres, pen test.

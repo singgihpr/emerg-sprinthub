@@ -45,6 +45,7 @@ func register(c echo.Context) error {
 	token := createAccessToken(userID, email)
 	setAuthCookie(c, token)
 	setRefreshCookie(c, issueRefreshToken(ctx, userID))
+	auditLogRequest(c, "user.register", "user", userID, userID, "")
 	return c.JSON(http.StatusOK, map[string]any{"user_id": userID, "email": email, "name": b.Name, "token": token})
 }
 
@@ -68,6 +69,7 @@ func login(c echo.Context) error {
 	token := createAccessToken(asStr(user["user_id"]), email)
 	setAuthCookie(c, token)
 	setRefreshCookie(c, issueRefreshToken(ctx, asStr(user["user_id"])))
+	auditLogRequest(c, "user.login", "user", asStr(user["user_id"]), asStr(user["user_id"]), "")
 	return c.JSON(http.StatusOK, map[string]any{
 		"user_id": user["user_id"], "email": email,
 		"name": user["name"], "picture": user["picture"], "token": token,

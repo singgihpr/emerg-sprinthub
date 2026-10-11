@@ -134,6 +134,9 @@ func newApp() *echo.Echo {
 	api.GET("/auth/oidc/login", oidcLogin)
 	api.GET("/auth/oidc/callback", oidcCallback)
 
+	api.GET("/me/export", exportUserData)
+	api.DELETE("/me", deleteAccount)
+
 	api.GET("/orgs", listOrgs)
 	api.POST("/orgs", createOrg)
 	api.PATCH("/orgs/:org_id", updateOrg)

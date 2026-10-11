@@ -7,16 +7,20 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { User, Key } from "@phosphor-icons/react";
+import { User, Key, ShieldCheck, Download, Trash } from "@phosphor-icons/react";
 
 export default function Profile() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, logout } = useAuth();
   const [name, setName] = useState(user?.name || "");
   const [picture, setPicture] = useState(user?.picture || "");
   const [savingProfile, setSavingProfile] = useState(false);
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
   const [savingPw, setSavingPw] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const initials = (user?.name || user?.email || "?").slice(0, 2).toUpperCase();
 
   const saveProfile = async (e) => {
@@ -51,6 +55,35 @@ export default function Profile() {
     } finally { setSavingPw(false); }
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const { data } = await api.get("/me/export");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `my-data-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Data exported");
+    } catch (err) {
+      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Export failed");
+    } finally { setExporting(false); }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await api.delete("/me", { confirm: true });
+      toast.success("Account deleted");
+      await logout();
+    } catch (err) {
+      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Delete failed");
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="p-8 space-y-6 max-w-3xl">
       <div>
@@ -63,6 +96,7 @@ export default function Profile() {
         <TabsList>
           <TabsTrigger value="details" className="gap-2" data-testid="profile-tab-details"><User size={14} weight="duotone" /> Details</TabsTrigger>
           <TabsTrigger value="password" className="gap-2" data-testid="profile-tab-password"><Key size={14} weight="duotone" /> Password</TabsTrigger>
+          <TabsTrigger value="privacy" className="gap-2" data-testid="profile-tab-privacy"><ShieldCheck size={14} weight="duotone" /> Privacy</TabsTrigger>
         </TabsList>
 
         <TabsContent value="details">
@@ -122,6 +156,52 @@ export default function Profile() {
               </div>
             </form>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="privacy">
+          <div className="space-y-4">
+            <Card className="p-6 border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-semibold">Export your data</h3>
+                  <p className="text-sm text-slate-500 mt-1">Download a JSON file with all your personal data (profile, tasks, comments, time entries).</p>
+                </div>
+                <Button variant="outline" onClick={handleExport} disabled={exporting} className="gap-2" data-testid="export-data-btn">
+                  <Download size={16} weight="bold" />
+                  {exporting ? "Exporting..." : "Export"}
+                </Button>
+              </div>
+            </Card>
+
+            <Card className="p-6 border-red-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-semibold text-red-900">Delete account</h3>
+                  <p className="text-sm text-slate-500 mt-1">Permanently delete your account and all associated data. This action cannot be undone.</p>
+                </div>
+                <Button variant="destructive" onClick={() => setDeleteOpen(true)} className="gap-2" data-testid="delete-account-btn">
+                  <Trash size={16} weight="bold" /> Delete
+                </Button>
+              </div>
+            </Card>
+          </div>
+
+          <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete account</DialogTitle>
+                <DialogDescription>
+                  This will permanently delete your account and all data. You must transfer ownership of any organizations you own before deleting.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex justify-end gap-3 mt-4">
+                <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+                <Button variant="destructive" onClick={handleDelete} disabled={deleting} data-testid="confirm-delete-btn">
+                  {deleting ? "Deleting..." : "Delete my account"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
       </Tabs>
     </div>

@@ -663,3 +663,109 @@ func TestDowngradeSoftCap(t *testing.T) {
 		t.Fatalf("expected 402 for quota exceeded after downgrade, got %d", status)
 	}
 }
+
+func TestGDPRExport(t *testing.T) {
+	token, uid := registerUser(t, "export@test.dev", "Export User")
+
+	code, data := req(t, "GET", "/api/me/export", token, nil)
+	if code != 200 {
+		t.Fatalf("export: %d %v", code, data)
+	}
+	user, ok := data["user"].(map[string]interface{})
+	if !ok || user["user_id"] != uid {
+		t.Fatalf("export user mismatch: %v", data)
+	}
+	if _, ok := data["tasks_created"]; !ok {
+		t.Fatal("export missing tasks_created")
+	}
+	if _, ok := data["exported_at"]; !ok {
+		t.Fatal("export missing exported_at")
+	}
+
+	// Audit log should exist
+	ctx := context.Background()
+	logs, _ := pgPoolFind(ctx, "audit_logs", map[string]any{"user_id": uid, "action": "user.data_export"})
+	if len(logs) == 0 {
+		t.Fatal("audit log not created for export")
+	}
+}
+
+func TestGDPRDeleteAccount(t *testing.T) {
+	token, uid := registerUser(t, "delete@test.dev", "Delete User")
+
+	// Register creates an org for the user; delete it so delete can proceed
+	ctx := context.Background()
+	_ = pgPoolExec(ctx, "DELETE FROM organizations WHERE owner_id = $1", uid)
+
+	// Without confirm should fail
+	code, _ := req(t, "DELETE", "/api/me", token, map[string]interface{}{})
+	if code != 400 {
+		t.Fatalf("delete without confirm should be 400, got %d", code)
+	}
+
+	// With confirm should succeed
+	code, out := req(t, "DELETE", "/api/me", token, map[string]interface{}{"confirm": true})
+	if code != 200 {
+		t.Fatalf("delete: %d %v", code, out)
+	}
+
+	// User should be gone
+	user, _ := pgPoolFindOne(ctx, "users", map[string]any{"user_id": uid})
+	if user != nil {
+		t.Fatal("user not deleted")
+	}
+
+	// Audit log should exist
+	logs, _ := pgPoolFind(ctx, "audit_logs", map[string]any{"user_id": uid, "action": "user.delete"})
+	if len(logs) == 0 {
+		t.Fatal("audit log not created for delete")
+	}
+}
+
+func TestGDPRDeleteOwnerBlocked(t *testing.T) {
+	token, _ := registerUser(t, "owner-delete@test.dev", "Owner Delete")
+
+	// Create an org (user becomes owner)
+	code, org := req(t, "POST", "/api/orgs", token, map[string]interface{}{"name": "Owner Org"})
+	if code != 200 {
+		t.Fatalf("create org: %d %v", code, org)
+	}
+
+	// Delete should fail because user owns an org
+	code, out := req(t, "DELETE", "/api/me", token, map[string]interface{}{"confirm": true})
+	if code != 400 {
+		t.Fatalf("owner delete should be 400, got %d %v", code, out)
+	}
+}
+
+func TestAuditLogAuth(t *testing.T) {
+	// Register creates audit log
+	code, out := req(t, "POST", "/api/auth/register", "", map[string]interface{}{
+		"email": "audit@test.dev", "password": "Secret@12345", "name": "Audit User",
+	})
+	if code != 200 {
+		t.Fatalf("register: %d %v", code, out)
+	}
+	uid := out["user_id"].(string)
+
+	ctx := context.Background()
+	logs, _ := pgPoolFind(ctx, "audit_logs", map[string]any{"user_id": uid})
+	if len(logs) < 1 {
+		t.Fatal("no audit logs for register")
+	}
+
+	// Login creates audit log
+	token := out["token"].(string)
+	code, _ = req(t, "POST", "/api/auth/login", "", map[string]interface{}{
+		"email": "audit@test.dev", "password": "Secret@12345",
+	})
+	if code != 200 {
+		t.Fatal("login failed")
+	}
+	_ = token
+
+	logs, _ = pgPoolFind(ctx, "audit_logs", map[string]any{"user_id": uid, "action": "user.login"})
+	if len(logs) == 0 {
+		t.Fatal("no audit log for login")
+	}
+}
