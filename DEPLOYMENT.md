@@ -6,7 +6,7 @@ Sprint Hub runs as three containers behind one port:
 | --- | --- | --- | --- |
 | `web` | `frontend/Dockerfile` → nginx:1.27-alpine | `80` | Serves the CRA build, proxies `/api/` → `backend:8000`, SPA fallback |
 | `backend` | `backend/Dockerfile` → multi-stage golang build on alpine | internal only | backend binary on 8000, non-root |
-| `mongo` | `mongo:7` | internal only | Named volume `mongo_data` |
+| `postgres` | `postgres:16` | internal only | Named volume `postgres_data` |
 
 Files that make this work: `docker-compose.yml`, `backend/Dockerfile`, `backend/.dockerignore`, `frontend/Dockerfile`, `frontend/.dockerignore`, `frontend/nginx.conf`, `.env.example`.
 
@@ -52,20 +52,17 @@ chmod 600 .env
 
 | Var | Required | Purpose |
 | --- | --- | --- |
-| `DB_NAME` | yes | Mongo database name |
 | `JWT_SECRET` | yes | Token signing key. Backend exits if missing. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | no | Seeded admin, defaults `widiardhana@gmail.com` / `Admin@1234` — **change these** |
 | `EMAIL_FROM_NAME` | no | Display name for outgoing email |
 | `WEBHOOK_CRON_SECRET` | no | Bearer token for the two `/api/cron/*` endpoints; they 401 without it. The built-in scheduler inside the backend also runs them. |
-
-`MONGO_URL` is set by compose (`mongodb://mongo:27017`) — do not put it in `.env`.
 
 ## 5. Build and start
 
 ```bash
 docker compose build          # first run: ~5-10 min (npm ci + craco build)
 docker compose up -d
-docker compose ps             # mongo + backend should reach "healthy"
+docker compose ps             # postgres + backend should reach "healthy"
 ```
 
 First backend start seeds the admin user, an "Acme Corp" org, and sample projects/sprints/tasks.
@@ -74,7 +71,7 @@ First backend start seeds the admin user, an "Acme Corp" org, and sample project
 
 ```bash
 curl -I http://localhost/                          # 200, index.html
-docker compose ps                                  # mongo + backend show "healthy" (backend /healthz)
+docker compose ps                                  # postgres + backend show "healthy" (backend /healthz)
 docker compose logs backend | grep -i "startup complete"
 ```
 
@@ -115,7 +112,7 @@ curl -sf -X POST http://localhost/api/cron/weekly-digest \
 ## 9. Operations
 
 ```bash
-docker compose logs -f backend          # or web / mongo
+docker compose logs -f backend          # or web / postgres
 docker compose restart backend
 docker compose down                     # stop, keep data
 docker compose up -d --build            # redeploy after git pull
@@ -128,12 +125,12 @@ Redeploy:
 git pull && docker compose build && docker compose up -d
 ```
 
-Backup Mongo (volume survives `down`, but take real dumps):
+Backup Postgres (volume survives `down`, but take real dumps):
 
 ```bash
-docker compose exec -T mongo mongodump --archive --gzip --db sprinthub > backup-$(date +%F).gz
+docker compose exec -T postgres pg_dump -U sprinthub sprinthub | gzip > backup-$(date +%F).sql.gz
 # restore:
-gunzip -c backup-2026-01-01.gz | docker compose exec -T mongo mongorestore --archive --gzip
+gunzip -c backup-2026-01-01.sql.gz | docker compose exec -T postgres psql -U sprinthub sprinthub
 ```
 
 ## 10. Troubleshooting
@@ -141,9 +138,9 @@ gunzip -c backup-2026-01-01.gz | docker compose exec -T mongo mongorestore --arc
 | Symptom | Cause / fix |
 | --- | --- |
 | Frontend build killed / exit 137 | OOM. Bigger VM, or build the image on your machine and `docker save`/`docker load` it onto the VM. |
-| `backend` exits immediately, exits with "MONGO_URL, DB_NAME and JWT_SECRET must be set" | `.env` missing or not readable by compose. It must sit next to `docker-compose.yml`. |
+| `backend` exits immediately with "DATABASE_URL and JWT_SECRET must be set" | `.env` missing or not readable by compose. It must sit next to `docker-compose.yml`. |
 | `502 Bad Gateway` from nginx | backend unhealthy or still starting: `docker compose logs backend`. |
 | `413 Request Entity Too Large` on logo upload | `client_max_body_size` in `frontend/nginx.conf` is 6m; raise it if you raise `MAX_LOGO_UPLOAD` in `handlers_org.go`. |
 | Deep link (e.g. `/tasks`) 404s after redeploy | nginx SPA fallback missing — confirm `frontend/nginx.conf` was copied into the image. |
 | Emails not sent | `SMTP_HOST` unset; backend logs `No SMTP_HOST configured; skipping email send`. |
-| Reset everything | `docker compose down -v` deletes the Mongo volume. Irreversible. |
+| Reset everything | `docker compose down -v` deletes the Postgres volume. Irreversible. |

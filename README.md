@@ -23,7 +23,7 @@ SprintHub is a comprehensive project management application for teams to manage 
 
 | Layer | Technology |
 |-------|-----------|
-| **Backend** | Go 1.24+, Echo v4, PostgreSQL 16, MongoDB 7 (legacy) |
+| **Backend** | Go 1.24+, Echo v4, PostgreSQL 16 |
 | **Frontend** | React 19, craco, shadcn/ui, Tailwind CSS 3.4, Recharts |
 | **Auth** | JWT (15 min access), HttpOnly refresh tokens, OIDC |
 | **Infrastructure** | Docker, Docker Compose, nginx |
@@ -305,8 +305,7 @@ docker compose down -v
 ```
 
 **Docker services:**
-- `mongo`: MongoDB 7 (legacy, internal only, no port published)
-- `postgres`: PostgreSQL 16 (internal only)
+- `postgres`: PostgreSQL 16 (internal only, no port published)
 - `backend`: Go API on port 8000
 - `web`: React frontend via nginx on port 8030
 
@@ -337,10 +336,8 @@ docker run -d --name postgres \
 cd backend
 
 cat > .env <<'EOF'
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=sprinthub
-JWT_SECRET=change-me-to-a-random-string
 DATABASE_URL=postgres://sprinthub:sprinthub@localhost:5432/sprinthub?sslmode=disable
+JWT_SECRET=your-random-secret-key
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=Admin@1234
 SEED_DEMO=true
@@ -375,8 +372,6 @@ npm start
 |----------|---------|-------------|
 | `JWT_SECRET` | **required** | JWT signing secret |
 | `DATABASE_URL` | **required** | PostgreSQL connection string |
-| `MONGO_URL` | — | MongoDB URL (legacy) |
-| `DB_NAME` | — | MongoDB database name |
 | `ADMIN_EMAIL` | `widiardhana@gmail.com` | Seeded admin email |
 | `ADMIN_PASSWORD` | `Admin@1234` | Seeded admin password |
 | `SEED_DEMO` | `true` | Seed admin + demo data on startup |
@@ -401,7 +396,7 @@ npm start
 ## Testing
 
 ```bash
-# Backend tests (requires MongoDB at localhost:27017)
+# Backend tests (requires PostgreSQL at localhost:5432)
 cd backend
 go test ./...
 
@@ -427,7 +422,7 @@ npm test
 emerg-sprinthub/
 ├── backend/
 │   ├── main.go              # Config, routes, CORS, error handler
-│   ├── db.go                # MongoDB client, collections, helpers
+│   ├── db.go                # ID/time helpers, value coercion
 │   ├── pg.go                # PostgreSQL client, query helpers
 │   ├── auth.go              # JWT, cookies, current-user lookup
 │   ├── models.go            # Request DTOs and validation

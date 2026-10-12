@@ -4,7 +4,7 @@
 Build a simply usable work management app that can handle sprint backlog and routine task, monitoring task status, task time tracking. Master data: organization, users, roles, project. User can switch task views between list, board (Kanban), Gantt chart, calendar, and workload views. User can know achievement and productivity.
 
 ## Architecture
-- **Backend**: Go (Echo) + mongo-driver + JWT + bcrypt + net/smtp + stdlib image/x-image (logo resize -> 256×256 PNG data URL)
+- **Backend**: Go (Echo) + PostgreSQL + JWT + bcrypt + net/smtp + stdlib image/x-image (logo resize -> 256×256 PNG data URL)
 - **Frontend**: React + Tailwind + Shadcn UI + Phosphor Icons + Recharts + Sonner
 - **Cron**: built-in scheduler (weekly-digest Mon 08:00 UTC, spawn-recurring daily 00:10 UTC)
 

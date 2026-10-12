@@ -19,7 +19,7 @@ import (
 )
 
 type config struct {
-	MongoURL, DBName, JWTSecret string
+	JWTSecret string
 	DatabaseURL                 string
 	AdminEmail, AdminPassword   string
 	EmailFromName, EmailFrom    string
@@ -48,8 +48,6 @@ func loadConfig() {
 		return def
 	}
 	cfg = config{
-		MongoURL:          get("MONGO_URL", ""),
-		DBName:            get("DB_NAME", ""),
 		DatabaseURL:       get("DATABASE_URL", ""),
 		JWTSecret:         get("JWT_SECRET", ""),
 		AdminEmail:        get("ADMIN_EMAIL", ""),
