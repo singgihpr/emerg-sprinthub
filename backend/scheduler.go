@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// Built-in scheduler replacing .emergent/crons.yml: weekly-digest Mondays
-// 08:00 UTC, spawn-recurring daily 00:10 UTC. The /api/cron/* webhook
-// endpoints remain available for external schedulers.
+// Built-in scheduler: weekly-digest Mondays 08:00 UTC, spawn-recurring daily
+// 00:10 UTC. The /api/cron/* webhook endpoints remain available for external schedulers.
 func startScheduler() {
 	go scheduleLoop(nextWeeklyDigest, func() { fireCron("weekly-digest", buildAndSendDigest) })
 	go scheduleLoop(nextDailySpawn, func() { fireCron("spawn-recurring", spawnRecurring) })

@@ -368,6 +368,10 @@ npm start
 
 ## Configuration
 
+For detailed setup instructions for external services (Google SSO, SMTP providers, Stripe billing), see [CONFIG.md](CONFIG.md).
+
+### Quick Reference
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_SECRET` | **required** | JWT signing secret |
@@ -383,10 +387,10 @@ npm start
 | `SMTP_PASS` | — | SMTP password |
 | `EMAIL_FROM` | `SMTP_USER` or `no-reply@localhost` | From email |
 | `EMAIL_FROM_NAME` | `SprintHub` | From name |
-| `APP_BASE_URL` | — | Base URL for email links |
+| `APP_BASE_URL` | — | Base URL for email links and SSO redirects |
 | `STRIPE_SECRET_KEY` | — | Stripe secret key |
 | `STRIPE_WEBHOOK_SECRET` | — | Stripe webhook secret |
-| `OIDC_ISSUER_URL` | — | OIDC issuer URL |
+| `OIDC_ISSUER_URL` | — | OIDC issuer URL (e.g., `https://accounts.google.com`) |
 | `OIDC_CLIENT_ID` | — | OIDC client ID |
 | `OIDC_CLIENT_SECRET` | — | OIDC client secret |
 | `WEBHOOK_CRON_SECRET` | — | Bearer token for `/api/cron/*` |
