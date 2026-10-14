@@ -74,10 +74,10 @@ export default function TeamActivity() {
 
   if (!data) return <div className="p-8 text-slate-500">Loading team activity…</div>;
 
-  const activeTimers = data.members.filter((m) => m.active_timer).length;
-  const idleAlerts = data.members.filter((m) => m.active_timer && (m.active_timer.elapsed_seconds + tick) > 7200).length;
-  const totalInProgress = data.members.reduce((s, m) => s + m.in_progress_tasks.length, 0);
-  const totalLoggedToday = data.members.reduce((s, m) => s + m.logged_today_minutes, 0);
+  const activeTimers = (data.members || []).filter((m) => m.active_timer).length;
+  const idleAlerts = (data.members || []).filter((m) => m.active_timer && (m.active_timer.elapsed_seconds + tick) > 7200).length;
+  const totalInProgress = (data.members || []).reduce((s, m) => s + (m.in_progress_tasks?.length || 0), 0);
+  const totalLoggedToday = (data.members || []).reduce((s, m) => s + m.logged_today_minutes, 0);
 
   return (
     <div className="p-8 space-y-6">
@@ -142,7 +142,7 @@ export default function TeamActivity() {
 
       {/* Member rows */}
       <div className="space-y-3">
-        {data.members.map((m) => {
+        {(data.members || []).map((m) => {
           const initials = (m.name || m.email || "?").slice(0, 2).toUpperCase();
           const elapsed = m.active_timer ? m.active_timer.elapsed_seconds + tick : 0;
           const overloaded = m.estimate_hours > 40;
@@ -211,11 +211,11 @@ export default function TeamActivity() {
                 {/* In progress list */}
                 <div className="md:col-span-1">
                   <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium mb-2">In progress</div>
-                  {m.in_progress_tasks.length === 0 ? (
+                  {(m.in_progress_tasks || []).length === 0 ? (
                     <div className="text-xs text-slate-400">Nothing in progress</div>
                   ) : (
                     <ul className="space-y-1.5">
-                      {m.in_progress_tasks.map((t) => (
+                      {(m.in_progress_tasks || []).map((t) => (
                         <li key={t.task_id} className="flex items-center gap-2 text-sm">
                           <Badge className={`${PRIO_STYLES[t.priority]} border-0 text-[10px] capitalize`}>{t.priority}</Badge>
                           <span className="text-slate-800 truncate flex-1">{t.title}</span>
@@ -243,11 +243,11 @@ export default function TeamActivity() {
                 {/* Recent activity */}
                 <div>
                   <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium mb-2">Recent time</div>
-                  {m.recent_activity.length === 0 ? (
+                  {(m.recent_activity || []).length === 0 ? (
                     <div className="text-xs text-slate-400">No recent entries</div>
                   ) : (
                     <ul className="space-y-1 text-xs">
-                      {m.recent_activity.slice(0, 3).map((e, i) => (
+                      {(m.recent_activity || []).slice(0, 3).map((e, i) => (
                         <li key={i} className="flex items-center justify-between gap-2">
                           <span className="text-slate-700 truncate flex-1">{e.task_title}</span>
                           <span className="font-mono text-slate-500 shrink-0">{fmtMinutes(e.minutes)}</span>
@@ -260,7 +260,7 @@ export default function TeamActivity() {
             </Card>
           );
         })}
-        {data.members.length === 0 && (
+        {(data.members || []).length === 0 && (
           <div className="text-center py-12 text-slate-500">No members yet.</div>
         )}
       </div>

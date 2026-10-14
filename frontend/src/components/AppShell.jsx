@@ -67,7 +67,7 @@ export default function AppShell() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-64">
               <DropdownMenuLabel className="text-xs uppercase tracking-wider text-slate-500">Workspaces</DropdownMenuLabel>
-              {orgs.map((o) => (
+              {(orgs || []).map((o) => (
                 <DropdownMenuItem key={o.org_id} onClick={() => switchOrg(o)} data-testid={`org-item-${o.org_id}`}>
                   <Buildings size={16} className="mr-2 text-slate-500" />
                   <span className="flex-1">{o.name}</span>

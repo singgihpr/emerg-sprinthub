@@ -460,7 +460,7 @@ func scanNextRow(rows pgx.Rows) (map[string]any, error) {
 }
 
 func scanRowsToMaps(rows pgx.Rows) ([]map[string]any, error) {
-	var out []map[string]any
+	out := []map[string]any{} // non-nil so empty results encode as [] not null
 	for rows.Next() {
 		m, err := scanNextRow(rows)
 		if err != nil {

@@ -55,7 +55,7 @@ export default function Tasks() {
       api.get(`/orgs/${currentOrg.org_id}/members`),
       api.get(`/orgs/${currentOrg.org_id}/sprints`),
     ]);
-    setTasks(t.data); setProjects(p.data); setMembers(m.data); setSprints(s.data);
+    setTasks(t.data || []); setProjects(p.data || []); setMembers(m.data || []); setSprints(s.data || []);
   }, [currentOrg]);
 
   useEffect(() => { load(); }, [load]);
@@ -67,7 +67,7 @@ export default function Tasks() {
 
   useEffect(() => { localStorage.setItem("task_assignee_filter", assignee); }, [assignee]);
 
-  const filtered = tasks.filter((t) => {
+  const filtered = (tasks || []).filter((t) => {
     if (query && !t.title.toLowerCase().includes(query.toLowerCase())) return false;
     if (projectFilter !== "all" && t.project_id !== projectFilter) return false;
     if (statusFilter !== "all" && t.status !== statusFilter) return false;
@@ -82,18 +82,18 @@ export default function Tasks() {
   const props = { tasks: filtered, projects, members, sprints, onEdit: (task) => setDialog({ open: true, task }), reload: load };
   const listProps = { ...props, groupByProject, statusFilter };
 
-  const projectOptions = [{ value: "all", label: "All projects" }, ...projects.map((p) => ({ value: p.project_id, label: p.name }))];
+  const projectOptions = [{ value: "all", label: "All projects" }, ...(projects || []).map((p) => ({ value: p.project_id, label: p.name }))];
   const statusOptions = [{ value: "all", label: "All statuses" }, ...TASK_STATUSES.map((s) => ({ value: s.v, label: s.l }))];
   const sprintOptions = [
     { value: "all", label: "All sprints" },
     { value: "backlog", label: "Backlog" },
-    ...sprints.map((s) => ({ value: s.sprint_id, label: s.name })),
+    ...(sprints || []).map((s) => ({ value: s.sprint_id, label: s.name })),
   ];
   const assigneeOptions = [
     { value: "all", label: "All assignees" },
     { value: "me", label: "Assigned to me" },
     { value: "unassigned", label: "Unassigned" },
-    ...members.filter((m) => m.user_id !== user?.user_id).map((m) => ({ value: m.user_id, label: m.name || m.email })),
+    ...(members || []).filter((m) => m.user_id !== user?.user_id).map((m) => ({ value: m.user_id, label: m.name || m.email })),
   ];
 
   return (

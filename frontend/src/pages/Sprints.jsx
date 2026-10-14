@@ -42,7 +42,7 @@ export default function Sprints() {
       api.get(`/orgs/${currentOrg.org_id}/tasks`),
       api.get(`/orgs/${currentOrg.org_id}/members`),
     ]);
-    setSprints(s.data); setProjects(p.data); setTasks(t.data); setOrgMembers(m.data);
+    setSprints(s.data || []); setProjects(p.data || []); setTasks(t.data || []); setOrgMembers(m.data || []);
   };
   useEffect(() => { load(); }, [currentOrg]);
 
@@ -81,7 +81,7 @@ export default function Sprints() {
   };
 
   const sprintStats = (sid) => {
-    const list = tasks.filter((t) => t.sprint_id === sid);
+    const list = (tasks || []).filter((t) => t.sprint_id === sid);
     const done = list.filter((t) => t.status === "done").length;
     return { total: list.length, done, progress: list.length ? (done / list.length) * 100 : 0 };
   };
@@ -103,7 +103,7 @@ export default function Sprints() {
       <div className="flex flex-wrap items-center gap-3">
         <FunnelSimple size={16} className="text-slate-400" />
         <Combobox value={filterProject} onValueChange={setFilterProject} placeholder="Project"
-          options={[{ value: "all", label: "All projects" }, ...projects.map((p) => ({ value: p.project_id, label: p.name }))]}
+          options={[{ value: "all", label: "All projects" }, ...(projects || []).map((p) => ({ value: p.project_id, label: p.name }))]}
           className="w-56 bg-white" data-testid="sprint-filter-project" />
         <Combobox value={filterStatus} onValueChange={setFilterStatus} placeholder="Status"
           options={[{ value: "all", label: "All statuses" }, ...SPRINT_STATUSES.map((s) => ({ value: s.v, label: s.l }))]}
@@ -116,7 +116,7 @@ export default function Sprints() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {sprints
+        {(sprints || [])
           .filter((s) => (filterProject === "all" || s.project_id === filterProject) && (filterStatus === "all" || s.status === filterStatus))
           .map((s) => {
           const st = sprintStats(s.sprint_id);
@@ -186,7 +186,7 @@ export default function Sprints() {
             </Card>
           );
         })}
-        {sprints.filter((s) => (filterProject === "all" || s.project_id === filterProject) && (filterStatus === "all" || s.status === filterStatus)).length === 0 && (
+        {(sprints || []).filter((s) => (filterProject === "all" || s.project_id === filterProject) && (filterStatus === "all" || s.status === filterStatus)).length === 0 && (
           <div className="col-span-full text-center py-12 text-slate-500">
             {sprints.length === 0 ? "No sprints yet." : "No sprints match these filters."}
           </div>
@@ -200,7 +200,7 @@ export default function Sprints() {
             <div><Label>Project</Label>
               <Combobox value={form.project_id} onValueChange={(v) => setForm({ ...form, project_id: v })}
                 placeholder="Select project" disabled={!!editing}
-                options={projects.map((p) => ({ value: p.project_id, label: p.name }))}
+                options={(projects || []).map((p) => ({ value: p.project_id, label: p.name }))}
                 className="mt-1.5" data-testid="sprint-project-select" />
             </div>
             <div><Label>Name</Label><Input className="mt-1.5" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="sprint-name-input" /></div>

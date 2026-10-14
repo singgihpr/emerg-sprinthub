@@ -23,7 +23,7 @@ export default function Members() {
   const load = async () => {
     if (!currentOrg) return;
     const { data } = await api.get(`/orgs/${currentOrg.org_id}/members`);
-    setMembers(data);
+    setMembers(data || []);
   };
   useEffect(() => { load(); }, [currentOrg]);
 
@@ -61,7 +61,7 @@ export default function Members() {
             </tr>
           </thead>
           <tbody>
-            {members.map((m) => (
+            {(members || []).map((m) => (
               <tr key={m.user_id} className="border-t border-slate-100 hover:bg-slate-50/50" data-testid={`member-row-${m.user_id}`}>
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">

@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatApiErrorDetail } from "@/lib/api";
-import { Kanban, ChartLine, Timer } from "@phosphor-icons/react";
+import { Kanban, ChartLine, Timer, GoogleLogo } from "@phosphor-icons/react";
 import { Navigate } from "react-router-dom";
 
 export default function Login() {
@@ -111,6 +111,22 @@ export default function Login() {
                 {busy ? "Working…" : mode === "login" ? "Sign in" : "Create account"}
               </Button>
             </form>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-slate-200" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-slate-500">Or continue with</span>
+              </div>
+            </div>
+
+            <Button variant="outline" className="w-full h-11 gap-2" asChild>
+              <a href="/api/auth/oidc/login">
+                <GoogleLogo size={18} weight="duotone" />
+                Sign in with Google
+              </a>
+            </Button>
           </Tabs>
         </Card>
       </div>

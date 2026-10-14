@@ -6,6 +6,8 @@ services:
       POSTGRES_USER: sprinthub
       POSTGRES_PASSWORD: sprinthub
       POSTGRES_DB: sprinthub
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2, Plus, Edit2 } from "@phosphor-icons/react";
+import { Trash, Plus, PencilSimple } from "@phosphor-icons/react";
 
 const PERMISSION_GROUPS = {
   "Organization": ["manage_org", "manage_billing", "invite_members", "manage_roles", "view_analytics"],
@@ -156,10 +156,10 @@ export default function Roles() {
               {!role.is_system && (
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={() => openEdit(role)}>
-                    <Edit2 size={14} />
+                    <PencilSimple size={14} />
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => remove(role)} className="text-red-600 hover:text-red-700">
-                    <Trash2 size={14} />
+                    <Trash size={14} />
                   </Button>
                 </div>
               )}

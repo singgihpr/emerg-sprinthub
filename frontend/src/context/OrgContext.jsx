@@ -12,9 +12,9 @@ export function OrgProvider({ children }) {
 
   const loadOrgs = useCallback(async () => {
     const { data } = await api.get("/orgs");
-    setOrgs(data);
+    setOrgs(data || []);
     const savedId = localStorage.getItem("current_org");
-    const found = data.find((o) => o.org_id === savedId) || data[0];
+    const found = (data || []).find((o) => o.org_id === savedId) || (data || [])[0];
     setCurrentOrg(found || null);
     if (found) localStorage.setItem("current_org", found.org_id);
   }, []);

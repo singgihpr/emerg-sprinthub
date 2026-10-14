@@ -56,14 +56,14 @@ export default function Dashboard({ withPeriodFilter = false }) {
       api.get(`/orgs/${currentOrg.org_id}/tasks`),
       api.get(`/orgs/${currentOrg.org_id}/projects`),
       api.get(`/orgs/${currentOrg.org_id}/members`),
-    ]).then(([t, p, m]) => setRefData({ tasks: t.data, projects: p.data, members: m.data }));
+    ]).then(([t, p, m]) => setRefData({ tasks: t.data || [], projects: p.data || [], members: m.data || [] }));
   }, [currentOrg, withPeriodFilter]);
 
-  const projectMap = useMemo(() => Object.fromEntries(refData.projects.map((p) => [p.project_id, p])), [refData.projects]);
-  const memberMap = useMemo(() => Object.fromEntries(refData.members.map((m) => [m.user_id, m])), [refData.members]);
+  const projectMap = useMemo(() => Object.fromEntries((refData.projects || []).map((p) => [p.project_id, p])), [refData.projects]);
+  const memberMap = useMemo(() => Object.fromEntries((refData.members || []).map((m) => [m.user_id, m])), [refData.members]);
   const scopedTasks = useMemo(() => {
     if (!range) return [];
-    return refData.tasks.filter((t) => {
+    return (refData.tasks || []).filter((t) => {
       const d = (t.created_at || "").slice(0, 10);
       return d >= range.start && d <= range.end;
     });
